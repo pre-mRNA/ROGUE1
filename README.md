@@ -1,4 +1,4 @@
-# R1
+# RNA Overlap-guided unified explanation
 Classification of long-read RNA splicing and transcriptional status from long reads
 
 # Overview
