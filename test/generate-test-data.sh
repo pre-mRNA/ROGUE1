@@ -1,15 +1,16 @@
 #!/bin/bash 
 
+# Gene of interest
+export target_gene=$1
+# target_gene="SRSF3"
+
 export bam_in="/g/data/lf10/as7425/2023_mrna-biogenesis-maps/analysis/2024-03-28_ASR012_HeLa-total-RNA004-rep1/ASR012_HeLa-total-RNA004-rep1_primary_genome_alignments_modCalled.bam"
 export anno_in="/g/data/lf10/as7425/genomes/human_genome/ensembl_release_110/Homo_sapiens.GRCh38.110.chr.gtf"
 
 # Output directory and files
-work_dir="/g/data/lf10/as7425/2023_mrna-biogenesis-maps/analysis/2024-03-28_ASR012_HeLa-total-RNA004-rep1/ASR012_HeLa-total-RNA004/classify_reads_tests/"; mkdir -p ${work_dir} 2>/dev/null
-bam_out="${work_dir}/filtered_reads.bam"
-gtf_out="${work_dir}/gene_annotation.gtf"
-
-# Gene of interest
-target_gene="RPL41"
+work_dir="/home/150/as7425/R1/test/"; mkdir -p ${work_dir} 2>/dev/null
+bam_out="${work_dir}/${target_gene}.bam"
+gtf_out="${work_dir}/${target_gene}.gtf"
 
 # Extract GTF entry for the target gene and ensure it is only one unique entry
 gtf_line=$(awk '$3 == "gene" && /gene_name "'$target_gene'";/' $anno_in)
@@ -31,4 +32,5 @@ samtools view -b "$bam_in" $chr:$start-$end -o $bam_out
 
 echo "GTF and BAM files for $target_gene have been successfully created in $work_dir."
 
+# Filter annotation for reads of interest 
 cat $anno_in | awk '/gene_name "'$target_gene'";/' > "$gtf_out"
