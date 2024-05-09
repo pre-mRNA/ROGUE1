@@ -16,6 +16,8 @@ read_classifier/
 └── utilities/
     ├── logging_config.py     # Configuration for logging across scripts
     └── run_command.py        # Utility to run shell commands
+color_bam/
+    └── color_bam_from_lis.py # Set alignment YC color bam tag from list of read IDs 
 ```
 
 # Dependencies
@@ -54,6 +56,24 @@ Additional outputs include summarized classifications of reads based on their bi
 
 Post-Processing:
 Use parse_output.py to further analyze and visualize the data:
+
+## Setting Color Tags in BAM Files
+
+To set color tags for specific reads in a BAM file, use the `bam_set_color.py` script. This utility requires a list of read IDs and the RGB color code that will be applied as a tag to these reads.
+
+### Command
+
+This command sets the RGB color `255,0,0` (red) to all reads listed in the `read_ids.txt` file. The changes are written to a new BAM file specified by the output path.
+
+### For bam_set_color.py
+
+- **Input BAM File**: A BAM file containing RNA sequencing reads.
+- **Read IDs File**: A plain text file where each line contains a single read ID that corresponds to those found in the BAM file.
+- **RGB Color**: The RGB color code in the format "R,G,B" where R, G, and B are integers between 0 and 255.
+
+- It's important to ensure that the RGB values are correct and that the read IDs exist in the input BAM file to avoid processing errors.
+- The script does not alter other tags or data within the BAM file except for adding or updating the `YC` tag for specified reads.
+
 
 # Notes
 - Ensure that the output directory has adequate space as genomic data can be quite large.
