@@ -27,18 +27,20 @@ def main():
     read_ids = read_read_ids(args.rids)
     color = validate_color(args.color)
     
-    modified_count = 0  # counter for modified reads
+    modified_count = 0  # count modified reads
     
-    with pysam.AlignmentFile(args.ibam, 'rb', threads=4) as infile, \
-         pysam.AlignmentFile(args.obam, 'wb', template=infile, threads=4) as outfile:
+    with pysam.AlignmentFile(args.ibam, 'rb', threads=8) as infile, \
+         pysam.AlignmentFile(args.obam, 'wb', template=infile, threads=8) as outfile:
         for read in infile:
             if read.query_name in read_ids:
                 read.set_tag("YC", color)
                 outfile.write(read)
                 modified_count += 1
 
-    pysam.sort("-o", f"{args.obam}.sorted.bam", args.obam, threads=4)
-    pysam.index(f"{args.obam}.sorted.bam", threads=4)
+    print(f"Sorting and indexing output bam file")
+    
+    pysam.sort("-o", f"{args.obam}.sorted.bam", args.obam, threads=8)
+    pysam.index(f"{args.obam}.sorted.bam", threads=8)
 
     print(f"Total reads modified: {modified_count}")
 
