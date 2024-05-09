@@ -36,6 +36,8 @@ def main():
                 read.set_tag("YC", color)
                 outfile.write(read)
                 modified_count += 1
+            else:
+                outfile.write(read)
 
     print(f"Sorting and indexing output bam file")
     
