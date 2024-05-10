@@ -68,8 +68,8 @@ def merge_features(output_dir, exon_ranges, intron_ranges, dog_ranges, verbose):
 
     # Prepare the command to adjust columns and set feature type
     cmd = f"awk 'BEGIN{{OFS=\"\\t\"}} {{$5=\"exon\"; $6=$6; $7=$4; $4=\".\"; print}}' {exons_bed} > {output_dir}/tmp_exons.bed; "
-    cmd += f"awk 'BEGIN{{OFS=\"\\t\"}} {{$5=\"intron\"; $6=$6; $7=$4; $4=\".\"; print}}' {introns_bed} > {output_dir}/tmp_introns.bed; "
-    cmd += f"awk 'BEGIN{{OFS=\"\\t\"}} {{$5=\"DOG\"; $6=$6; $7=$4; $4=\".\"; print}}' {dogs_bed} > {output_dir}/tmp_dogs.bed; "
+    cmd += f"awk 'BEGIN{{OFS=\"\\t\"}} {{$6=$5; $5=\"intron\"; $7=$4; $4=\".\"; print}}' {introns_bed} > {output_dir}/tmp_introns.bed; "
+    cmd += f"awk 'BEGIN{{OFS=\"\\t\"}} {{$6=$5; $5=\"DOG\"; $7=$4; $4=\".\"; print}}' {dogs_bed} > {output_dir}/tmp_dogs.bed; "
     cmd += f"cat {output_dir}/tmp_exons.bed {output_dir}/tmp_introns.bed {output_dir}/tmp_dogs.bed | "
     # cmd += "sort -k1,1 -k2,2n | bedtools merge -i - -c 5,7 -o distinct -s > " + merged_bed
     cmd += "sort -k1,1 -k2,2n > " + merged_bed
@@ -81,14 +81,41 @@ def merge_features(output_dir, exon_ranges, intron_ranges, dog_ranges, verbose):
 
     return merged_bed
 
-def merge_exons(bed_file, output_dir):
+def merge_feature(bed_file, output_dir, feature):
     """Merge overlapping exons in the BED file."""
-    merged_file_path = os.path.join(output_dir, "merged_exons.bed")
+    merged_file_path = os.path.join(output_dir, f"merged_{feature}.bed")
+    
+    # debug 
+    # print(f"feature is {feature} and output dir is {output_dir} and path is {merged_file_path}")
+    
     command = f"bedtools merge -i {bed_file} -s -c 4,5,6 -o 'distinct' > {merged_file_path}"
     subprocess.run(command, shell=True, check=True)
+    
     # Overwrite the original BED file with the merged results
     subprocess.run(f"mv {merged_file_path} {bed_file}", shell=True, check=True)
     logging.info(f"Merged exon BED file created and original overwritten: {bed_file}")
+
+
+
+def color_features(input_bed, output_bed):
+
+    df = pd.read_csv(input_bed, sep='\t', header=None, names=['chr', 'start', 'end', 'dot', 'feature', 'strand', 'gene_id'])
+
+    colors = {
+        'DOG': '255,0,0',   # red
+        'exon': '0,255,0',  # green
+        'intron': '0,0,255' # blue
+    }
+    
+    df['color'] = df['feature'].map(colors)
+
+    # blockcount for visualisation 
+    df['blockCount'] = '.'
+
+    # fit extended bed format 
+    df = df[['chr', 'start', 'end', 'dot', 'feature', 'strand', 'gene_id', 'blockCount', 'color']]
+
+    df.to_csv(output_bed, sep='\t', header=False, index=False)
 
 
 def main(args):
@@ -116,13 +143,18 @@ def main(args):
         # we still have overlapping exons in cases where two exons share an exon region 
         # next, merge exons 
         if feature_type == 'exon':
-            merge_exons(bed_file, output_dir)
+            merge_feature(bed_file, output_dir, "exons")
+
+        if feature_type == 'gene':
+            merge_feature(bed_file, output_dir, "gene")
 
 
-    # create downstreamof gene regions 
+    # create downstream of gene regions 
     if 'gene' in bed_files:
         extended_bed_file = extend_gene_bed(bed_files['gene'], output_dir, genome_file, args.extend_bases)
         logging.info(f"Extended gene regions saved at: {extended_bed_file}")
+        merge_feature(extended_bed_file, output_dir, "dog")
+        
 
     # Create introns by subtracting exons from genes
     if 'gene' in bed_files and 'exon' in bed_files:
@@ -134,6 +166,11 @@ def main(args):
 
     # Merge all BED files
     merge_features(output_dir, bed_files['exon'], intron_bed, dog_bed, args.verbose)
+
+    # color it 
+    input_bed = os.path.join(output_dir, "all_features.bed")
+    output_bed = os.path.join(output_dir, "all_features_colored.bed")
+    color_features(input_bed, output_bed)
 
     logging.info("Genome indexing complete.")
 
