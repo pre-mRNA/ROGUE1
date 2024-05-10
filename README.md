@@ -57,6 +57,19 @@ Additional outputs include summarized classifications of reads based on their bi
 Post-Processing:
 Use parse_output.py to further analyze and visualize the data:
 
+
+## Creating a genome undex 
+``` 
+python3 ./utils/create_genome_index.py
+```
+__output__: A bed file that annotes each part of the genome as intron, exon, or downstream of gene 
+
+## filtering GTF annotaiton: 
+```
+python3 ./filter_annotation/
+```
+TODO: Test and document this code 
+
 ## Setting Color Tags in BAM Files
 
 To set color tags for specific reads in a BAM file, use the `bam_set_color.py` script. This utility requires a list of read IDs and the RGB color code that will be applied as a tag to these reads.
