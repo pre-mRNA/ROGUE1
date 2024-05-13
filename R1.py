@@ -51,10 +51,18 @@ def main(bam_file, gtf_file, output_table):
     # Extract modifications from the BAM file
     mod_output_file = os.path.join(output_dir, "modifications.csv")
     with open(mod_output_file, 'w') as mod_file:
-        mod_file.write("Position,ModificationProbability\n")
+        # Write header to the CSV file
+        mod_file.write("ReadID,Reference,Strand,Modifications\n")
+        
+        # Iterate through the modifications yielded by extract_modifications
         for modifications in extract_modifications(bam_file):
-            if modifications:  # Ensure there are modifications to write
-                mod_file.write('\n'.join(modifications) + '\n')
+            if modifications is not None:  # Check if modifications is not None
+                mod_file.write(f"{modifications}\n")  # Write modifications to file
+                print(modifications)  # Optionally, also print modifications
+            else:
+                # This else block can be used if you want to log no modification cases
+                # For example, you could write a specific line, or simply not handle it here
+                print("No modifications or missing tags for some reads.")
 
     return 
 
