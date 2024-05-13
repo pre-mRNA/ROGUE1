@@ -3,16 +3,18 @@
 
 
 
-export bam="/home/150/as7425/R1/test/data/A=.bam"
+export bam="/home/150/as7425/R1/test/data/ACTG1.bam"
 export gtf="/home/150/as7425/R1/test/data/ACTG1.gtf"
 export out_dir="/home/150/as7425/R1/test/outputs/ACTG1/"; mkdir -p ${out_dir} 2>/dev/null
 export output="${out_dir}/output_table.tsv"
 
+export bam="/home/150/as7425/R1/test/data/ACTG1_nascent.bam"
+cat <(samtools view -H $bam) <(samtools view $bam | grep "2056f743-ec24-41e4-9d3c-4581cd8595a6") | samtools view -b > ~/R1/test/data/tmp.bam
+samtools index  ~/R1/test/data/tmp.bam
+
 python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output}
 
 
-export bam="/home/150/as7425/R1/test/data/SRSF3.bam"
-cat <(samtools view -H $bam) <(samtools view $bam | grep "2056f743-ec24-41e4-9d3c-4581cd8595a6") | samtools view -b > ~/R1/test/data/tmp.bam
 
 
 cat <(samtools view -H $bam) <(samtools view $bam | grep "0fc2829e-c896") | samtools view -b > ~/R1/test/data/tmp.bam

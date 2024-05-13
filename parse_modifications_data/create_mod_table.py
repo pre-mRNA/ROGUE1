@@ -115,17 +115,17 @@ def adjust_positions_for_orientation(mm_tag, seq, is_reverse):
 
 def calculate_genomic_position(pos, cigar, start_pos, is_reverse):
    
-    current_pos = start_pos
-    seq_pos = 0
+    current_pos = start_pos # position on reference 
+    seq_pos = 0 # position on the read 
 
-    print(f"current pos is {current_pos}, target pos is {pos}")
+    print(f"genomic pos is {current_pos}, distance to target is {pos - seq_pos}")
 
     for length, operation in parse_cigar(cigar):
-        print(f"pos is {current_pos}")
-        print(f"moving {length} due to {operation}")
+        print(f"genomic pos is {current_pos} and distance to target is {pos - seq_pos}")
+        print(f"iterating {length} nt due to {operation}")
 
         if operation in {'M', 'X', '='}:  # match
-
+            print("match")
             if seq_pos <= pos < seq_pos + length:
                 print(f"we have a hit at {current_pos + (pos - seq_pos)}")
                 return current_pos + (pos - seq_pos) if not is_reverse else current_pos + (length - (pos - seq_pos) - 1)
@@ -134,16 +134,19 @@ def calculate_genomic_position(pos, cigar, start_pos, is_reverse):
             current_pos += length
 
         elif operation in {'D', 'N'}:  # deletion / splice 
-
+            print("deletion")    
             current_pos += length
 
-        elif operation == 'I':  
-
+        elif operation in {'I', 'S'}:  
+            print("insertion")  
+            # if the target position is within the softclip, return none since it's not in the reference 
             if seq_pos <= pos < seq_pos + length:
-
+                print("Modification is softclipped")
                 return None  # insertions are not seen in the reference 
             
+            # otherwise, move down the sequence
             seq_pos += length
+            print(f"seq_pos is {seq_pos}")
 
     return None  
 
