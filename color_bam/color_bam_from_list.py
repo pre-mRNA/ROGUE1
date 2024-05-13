@@ -41,8 +41,8 @@ def main():
 
     print(f"Sorting and indexing output bam file")
     
-    # pysam.sort("-o", f"{args.obam}.sorted.bam", args.obam, threads=8)
-    # pysam.index(f"{args.obam}.sorted.bam", threads=8)
+    #pysam.sort("-o", f"{args.obam}.sorted.bam", args.obam, threads=8)
+    #pysam.index(f"{args.obam}.sorted.bam", threads=8)
 
     print(f"Total reads modified: {modified_count}")
 
