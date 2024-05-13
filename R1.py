@@ -31,6 +31,9 @@ from process_read_end_positions import calculate_distance_for_unique_positions, 
 from process_gtf import parse_attributes, parse_gtf_line, get_gene_exon_table, get_biotypes 
 from parse_classifications import parse_read_classification, summarize_error_cases, classify_read, print_classification_summary
 
+### mod table 
+sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
+from create_mod_table import extract_modifications
 
 # set logging level 
 import logging 
@@ -44,6 +47,16 @@ def main(bam_file, gtf_file, output_table):
 
     # generate a genome file for bedtools sort 
     genome_file = generate_genome_file(bam_file, output_dir) 
+
+    # Extract modifications from the BAM file
+    mod_output_file = os.path.join(output_dir, "modifications.csv")
+    with open(mod_output_file, 'w') as mod_file:
+        mod_file.write("Position,ModificationProbability\n")
+        for modifications in extract_modifications(bam_file):
+            if modifications:  # Ensure there are modifications to write
+                mod_file.write('\n'.join(modifications) + '\n')
+
+    return 
 
     # create a bed file of gene regions
     gene_bed_file = gtf_to_bed(gtf_file, "gene", output_dir) 
