@@ -33,7 +33,7 @@ from parse_classifications import parse_read_classification, summarize_error_cas
 
 ### mod table 
 sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
-from create_mod_table import extract_modifications
+from map_mm_tag_to_genome_position import extract_modifications
 
 # set logging level 
 import logging 
