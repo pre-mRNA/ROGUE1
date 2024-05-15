@@ -4,6 +4,7 @@ import subprocess
 import pandas as pd
 import logging 
 import sys
+from tempfile import NamedTemporaryFile
 
 # import gtf_to_bed
 sys.path.append("/home/150/as7425/R1/read_classifier")
@@ -82,7 +83,6 @@ def merge_features(output_dir, exon_ranges, intron_ranges, dog_ranges, verbose):
     return merged_bed
 
 def merge_feature(bed_file, output_dir, feature):
-    """Merge overlapping exons in the BED file."""
     merged_file_path = os.path.join(output_dir, f"merged_{feature}.bed")
     
     # debug 
@@ -91,7 +91,7 @@ def merge_feature(bed_file, output_dir, feature):
     command = f"bedtools merge -i {bed_file} -s -c 4,5,6 -o 'distinct' > {merged_file_path}"
     subprocess.run(command, shell=True, check=True)
     
-    # Overwrite the original BED file with the merged results
+    # overwrite the original BED file with the merged results
     subprocess.run(f"mv {merged_file_path} {bed_file}", shell=True, check=True)
     logging.info(f"Merged exon BED file created and original overwritten: {bed_file}")
 
@@ -118,6 +118,73 @@ def color_features(input_bed, output_bed):
     df.to_csv(output_bed, sep='\t', header=False, index=False)
 
 
+
+def annotate_upstream_regions(gene_bed_file, output_dir, genome_file, extend_bases=500):
+    upstream_bed = NamedTemporaryFile(dir=output_dir, delete=False, suffix="_upstreamRegions.bed").name
+
+    # Load the genome sizes to ensure extensions do not exceed chromosome lengths
+    genome = pd.read_csv(genome_file, sep="\t", header=None, index_col=0, squeeze=True).to_dict()
+
+    # Read the gene BED file
+    df = pd.read_csv(gene_bed_file, sep="\t", header=None)
+
+    # Extend gene coordinates based on strand
+    def extend_upstream(row):
+        chrom, start, end, strand = row[0], row[1], row[2], row[5]
+        if strand == "+":
+            new_start = max(start - extend_bases, 0)  # Cap at 0 to avoid negative start coordinates
+            return pd.Series([chrom, new_start, start, *row[3:5], strand, *row[6:]])
+        else:
+            new_end = min(end + extend_bases, genome.get(chrom, float('inf')))
+            return pd.Series([chrom, end, new_end, *row[3:5], strand, *row[6:]])
+
+    # Apply function to each row
+    df = df.apply(extend_upstream, axis=1)
+
+    # Print the first few entries to see how they are modified
+    print(df.head())
+    # Print the genome dictionary to ensure correct chromosome lengths
+    print(genome)
+
+    # Sort DataFrame by chromosome and start position for consistent order
+    df.sort_values([0, 1], inplace=True)
+
+    # Write the modified DataFrame to a file
+    df.to_csv(upstream_bed, sep="\t", header=False, index=False)
+
+    logging.info(f"Upstream regions annotated at: {upstream_bed}")
+    return upstream_bed
+
+def duplicate_to_minus_strand(input_bed, output_dir):
+    output_bed = os.path.join(output_dir, "all_features_with_antisense.bed")
+    # TODO: verify this command
+    command = f"awk 'BEGIN{{OFS=\"\\t\"}} {{print $1, $2, $3, $4, $5, ($6 == \"+\" ? \"-\" : \"+\"), $7, $8, $9; print $0}}' {input_bed} > {output_bed}"
+    run_command(command)
+    logging.info(f"Features duplicated to opposite strand at: {output_bed}")
+    return output_bed
+
+
+
+def clip_features(base_bed, features_to_remove, output_dir, feature_type):
+   
+    clipped_bed = os.path.join(output_dir, f"{feature_type}_clipped_features.bed")
+    
+    command = f"bedtools subtract -a {base_bed} -b {features_to_remove} > {clipped_bed}"
+    run_command(command)
+    
+    logging.info(f"Features clipped for {feature_type} at: {clipped_bed}")
+    return clipped_bed
+
+def merge_all_features(feature_beds, output_dir):
+    merged_bed = os.path.join(output_dir, "merged_all_features.bed")
+    bed_list = " ".join(feature_beds)
+    command = f"cat {bed_list} | sort -k1,1 -k2,2n | bedtools merge -i - > {merged_bed}"
+    run_command(command)
+    logging.info(f"All features merged into: {merged_bed}")
+    return merged_bed
+
+
+
 def main(args):
 
     setup_logging(logging.DEBUG if args.verbose else logging.INFO)
@@ -127,7 +194,7 @@ def main(args):
         os.makedirs(output_dir)
         logging.info("Output directory created.")
     
-    # Create genome index for bedtools from the FASTA index file 
+    # create genome index for bedtools from the FASTA index file 
     genome_file = create_genome_file_from_fasta_index(args.fasta_index_file, output_dir)
     logging.info(f"Genome size file created at: {genome_file}")
 
@@ -156,24 +223,35 @@ def main(args):
         merge_feature(extended_bed_file, output_dir, "dog")
         
 
-    # Create introns by subtracting exons from genes
+    # create introns by subtracting exons from genes
     if 'gene' in bed_files and 'exon' in bed_files:
         intron_bed = create_introns(bed_files['gene'], bed_files['exon'], output_dir, args.verbose)
 
-    # Create non-intersecting DOGs
+    # create non-intersecting DOGs
     if 'gene' in bed_files:
         dog_bed = create_non_intersecting_dogs(bed_files['gene'], extended_bed_file, output_dir, args.verbose)
 
-    # Merge all BED files
+    # merge all BED files for introns, exons, dogs 
     merge_features(output_dir, bed_files['exon'], intron_bed, dog_bed, args.verbose)
 
-    # color it 
+    # color the bed file 
     input_bed = os.path.join(output_dir, "all_features.bed")
     output_bed = os.path.join(output_dir, "all_features_colored.bed")
     color_features(input_bed, output_bed)
 
-    logging.info("Genome indexing complete.")
+    # extend genes upstream to get 'upstream_of_gene' features and clip by existing annotations
+    upstream_bed = annotate_upstream_regions(bed_files['gene'], output_dir, genome_file, 2000)
+    clipped_upstream_bed = clip_features(upstream_bed, output_bed, output_dir, "upstream")
 
+    # merge all BED files for introns, exons, dogs, clipped_upstream_bed 
+    final_merged_bed = merge_all_features([os.path.join(output_dir, "merged_all_features.bed"), clipped_upstream_bed], output_dir)
+
+    # Handle antisense features
+    antisense_bed = duplicate_to_minus_strand(final_merged_bed, output_dir)
+    clipped_antisense_bed = clip_features(antisense_bed, final_merged_bed, output_dir, "antisense")
+    final_merged_bed = merge_all_features([final_merged_bed, clipped_antisense_bed], output_dir)
+
+    logging.info("Genome indexing and feature extension complete.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create comprehensive genome annotation from a GTF file.")
@@ -182,6 +260,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output_bed", required=True, help="Path to store output bed files.")
     parser.add_argument("--extend_bases", type=int, default=5000, help="Number of bases to extend gene regions to create DOGs.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging purposes.")
+
 
     args = parser.parse_args()
     main(args)
