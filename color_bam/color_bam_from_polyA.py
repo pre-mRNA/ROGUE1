@@ -3,11 +3,12 @@ import pysam
 
 def calculate_color(pt_value):
     
-    # define color thresholds
     low_threshold = 30
     high_threshold = 120
-    
-    # clamping the pt_value between the thresholds
+    gray_color = "128,128,128"  # RGB for grey
+
+    if pt_value == -1:
+        return gray_color
     if pt_value <= low_threshold:
         return "255,0,0"  # red
     elif pt_value >= high_threshold:
@@ -34,16 +35,20 @@ def main():
     with pysam.AlignmentFile(args.ibam, 'rb', threads=8) as infile, \
          pysam.AlignmentFile(args.obam, 'wb', template=infile, threads=8) as outfile:
         for read in infile:
-            pt_value = read.get_tag("PT", default=0)
+            try:
+                pt_value = read.get_tag("pt")
+            except KeyError:
+                pt_value = -1  # default PT value if not present
+            
             color = calculate_color(pt_value)
             read.set_tag("YC", color)
             outfile.write(read)
             modified_count += 1
 
-    # print(f"Sorting and indexing output BAM file")
+    print(f"Sorting and indexing output BAM file")
     
-    # pysam.sort("-o", f"{args.obam}.sorted.bam", args.obam, threads=8)
-    # pysam.index(f"{args.obam}.sorted.bam", threads=8)
+    # index
+    pysam.index(f"{args.obam}", threads=8)
 
     print(f"Total reads modified: {modified_count}")
 
