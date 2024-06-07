@@ -39,7 +39,7 @@ def read_gtf(gtf_file):
                 gtf_data.append(values)
     gtf = pd.DataFrame(gtf_data, columns=gtf_columns)
 
-    # Extract attributes into separate columns
+    # extract attributes into separate columns
     def extract_attributes(attribute_str):
         attributes = {}
         for attribute in attribute_str.split('; '):
@@ -57,38 +57,35 @@ def read_gtf(gtf_file):
 
 def main(input_file, output_file, gtf_file, splice_threshold, intron_positive_threshold, intron_negative_threshold):
     
-    # Load GTF file
     annotation = read_gtf(gtf_file)
 
-    # Filter for protein-coding genes that contain introns
+    # identify protein-coding genes that contain introns
     protein_coding_intron_containing_genes = annotation[
         (annotation['feature'] == 'exon') & 
         (annotation['exon_number'] == 2) & 
         (annotation['gene_biotype'] == 'protein_coding')
     ]['gene_id'].unique()
 
-    # Load dataset
     data = import_process_data(input_file)
 
     initial_read_count = len(data)
 
-    # Calculate intronic alignment percentage
     data['percent_intronic_alignment'] = data['intronic_alignment'] / data['alignment_length']
     data['percent_intronic_alignment'].replace([np.inf, -np.inf], np.nan, inplace=True)  # Replace infinite values with NaN
     data.dropna(subset=['percent_intronic_alignment'], inplace=True)  # Drop rows with NaN values
 
-    # Filter for protein-coding genes with introns
+    # filter for protein-coding genes with introns
     data = data[data['gene_id'].isin(protein_coding_intron_containing_genes)]
     filtered_read_count = len(data)
 
-    # Classify reads
+    # classify reads
     data['splicing_classification'] = np.where(
         (data['splice_count'] >= splice_threshold) & 
         (data['intronic_alignment'] <= intron_negative_threshold), 'spliced',
         np.where(data['intronic_alignment'] > intron_positive_threshold, 'intron_retained', 'ambiguous')
     )
 
-    # Print summary
+    # summary 
     print(f"Using thresholds - Splice: {splice_threshold}, Intron Positive: {intron_positive_threshold}, Intron Negative: {intron_negative_threshold}")
     print(f"Initial read count: {initial_read_count}")
     print(f"Filtered read count (protein-coding with introns): {filtered_read_count}")
@@ -97,7 +94,6 @@ def main(input_file, output_file, gtf_file, splice_threshold, intron_positive_th
     print(f"Ambiguous reads: {len(data[data['splicing_classification'] == 'ambiguous'])}")
     print(f"Discarded reads: {initial_read_count - filtered_read_count}")
 
-    # Save classifications to a single output file
     output_data = data[['read_id', 'splicing_classification']]
     output_data.columns = ['read_id', 'classification']
     output_data.to_csv(output_file, sep='\t', header=True, index=False)

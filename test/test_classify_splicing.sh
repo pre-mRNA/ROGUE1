@@ -23,3 +23,4 @@ export anno_in="/g/data/lf10/as7425/genomes/human_genome/ensembl_release_110/Hom
 
 python3 ~/R1/classify_splicing/classify_splicing.py ${output} "${out_dir}/classify_splicing_srsf3.txt" ${anno_in} 
 
+python3 ~/R1/color_bam/color_bam_from_list.py -ibam $bam -obam ${out_dir}/SRSF3_splicing)_color.bam -class_file 
