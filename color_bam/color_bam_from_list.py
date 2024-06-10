@@ -54,8 +54,8 @@ def main():
     modified_count = 0  # count modified reads
     missing_reads = set(classifications.keys())  # initialize missing reads with all read_ids from classification file
 
-    with pysam.AlignmentFile(args.ibam, 'rb', threads=8) as infile, \
-         pysam.AlignmentFile(args.obam, 'wb', template=infile, threads=8) as outfile:
+    with pysam.AlignmentFile(args.ibam, 'rb', threads=48) as infile, \
+         pysam.AlignmentFile(args.obam, 'wb', template=infile, threads=48) as outfile:
         for read in infile:
             if read.query_name in classifications:
                 read.set_tag("YC", classifications[read.query_name])
@@ -66,11 +66,14 @@ def main():
     if missing_reads:
         print(f"Warning: the following reads were not found in the BAM file: {', '.join(missing_reads)}")
 
-    print(f"sorting and indexing output bam file")
+    print(f"Indexing output bam file")
 
-    # sort and index the output BAM file
-    pysam.sort("-o", f"{args.obam}.sorted.bam", args.obam, threads=8)
-    pysam.index(f"{args.obam}.sorted.bam", threads=8)
+
+    # assume the input bam is already sorted 
+    # pysam.sort("-o", f"{args.obam}.sorted.bam", args.obam, threads=48)
+    
+    # index the output bam
+    pysam.index(f"{args.obam}", threads=48)
 
     print(f"total reads modified: {modified_count}")
 
