@@ -51,10 +51,21 @@ def main(input_file, output_file, gtf_file, splice_threshold, intron_positive_th
     data = data[data['gene_id'].isin(protein_coding_intron_containing_genes)]
     filtered_read_count = len(data)
 
+    # data['splicing_classification'] = np.where(
+    #     (data['splice_count'] >= splice_threshold) & 
+    #     (data['intronic_alignment'] <= intron_negative_threshold), 'spliced',
+    #     np.where(data['intronic_alignment'] > intron_positive_threshold, 'intron_retained', 'ambiguous')
+    # )
+
+    # classify partially-spliced reads as a separate entity 
     data['splicing_classification'] = np.where(
         (data['splice_count'] >= splice_threshold) & 
         (data['intronic_alignment'] <= intron_negative_threshold), 'spliced',
-        np.where(data['intronic_alignment'] > intron_positive_threshold, 'intron_retained', 'ambiguous')
+        np.where(
+            (data['splice_count'] >= splice_threshold) & 
+            (data['intronic_alignment'] > intron_positive_threshold), 'partially-spliced',
+            np.where(data['intronic_alignment'] > intron_positive_threshold, 'intron_retained', 'ambiguous')
+        )
     )
 
     print(f"Using thresholds - Splice: {splice_threshold}, Intron Positive: {intron_positive_threshold}, Intron Negative: {intron_negative_threshold}")
