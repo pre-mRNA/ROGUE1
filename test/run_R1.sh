@@ -6,4 +6,20 @@ export gtf="/home/150/as7425/R1/test/data/${target_gene}.gtf"
 export out_dir="/home/150/as7425/R1/test/outputs/${target_gene}/"; mkdir -p ${out_dir} 2>/dev/null
 export output="${out_dir}/output_table.tsv"
 
-python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output}
+# run R1 without calculating modifications
+time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output}
+wc -l ${output}
+# 946 lines 
+# real    0m7.244s
+
+# run R1 while calculate modifications 
+time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -m
+wc -l ${output}
+# 946 lines 
+# real    0m7.534s 
+
+# run R1 while calculate polyA tail 
+time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p
+wc -l ${output}
+# 946 lines 
+# real    0m7.534s 

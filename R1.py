@@ -34,13 +34,14 @@ from parse_classifications import parse_read_classification, summarize_error_cas
 ### mod table 
 sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
 from map_mm_tag_to_genome_position import extract_modifications
+from extract_polyA_length import fetch_polyA_pt
 
 # set logging level 
 import logging 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 # main 
-def main(bam_file, gtf_file, output_table):
+def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA):
 
     # fetch output directory 
     output_dir = os.path.dirname(output_table) 
@@ -48,38 +49,17 @@ def main(bam_file, gtf_file, output_table):
     # generate a genome file for bedtools sort 
     genome_file = generate_genome_file(bam_file, output_dir) 
 
-    # # Extract modifications from the BAM file
-    # mod_output_file = os.path.join(output_dir, "modifications.csv")
-    # with open(mod_output_file, 'w') as mod_file:
-    #     # Write header to the CSV file
-    #     mod_file.write("ReadID,Reference,Strand,Modifications\n")
-        
-    #     # Iterate through the modifications yielded by extract_modifications
-    #     for modifications in extract_modifications(bam_file):
-    #         if modifications is not None:  # Check if modifications is not None
-    #             mod_file.write(f"{modifications}\n")  # Write modifications to file
-    #             #print(modifications)  # Optionally, also print modifications
-    #         else:
-    #             # This else block can be used if you want to log no modification cases
-    #             # For example, you could write a specific line, or simply not handle it here
-    #             print("No modifications or missing tags for some reads.")
-
-    # return 
-
-    # extract modifications from the BAM file
-    modifications_dict = {}
-    for modification in extract_modifications(bam_file):
-        if modification is not None:
-            # print(f"mofification is {modification}")
-            read_id, reference, strand, mods = modification.split('\t')
-            modifications_dict[read_id] = mods
-        else:
-            modifications_dict[read_id] = "No modifications or missing tags"
-
-    # create a DataFrame for modifications
-    modifications_df = pd.DataFrame(list(modifications_dict.items()), columns=['read_id', 'Modifications'])
-
-    print(modifications_df.head())
+    # calculate mod probs if flag is set 
+    if calculate_modifications:
+        modifications_dict = {}
+        for modification in extract_modifications(bam_file):
+            if modification is not None:
+                read_id, reference, strand, mods = modification.split('\t')
+                modifications_dict[read_id] = mods
+            else:
+                modifications_dict[read_id] = "No modifications or missing tags"
+        modifications_df = pd.DataFrame(list(modifications_dict.items()), columns=['read_id', 'Modifications'])
+        print(modifications_df.head())
 
     # create a bed file of gene regions
     gene_bed_file = gtf_to_bed(gtf_file, "gene", output_dir) 
@@ -97,8 +77,15 @@ def main(bam_file, gtf_file, output_table):
     # parse the bedtools intersect files 
     df = parse_output(intersect_files[0], intersect_files[1], intersect_files[2], intersect_files[3], intersect_files[4])
     
-    # merge the modifications 
-    df = pd.merge(df, modifications_df, on='read_id', how='left')
+    # merge the modifications if mods are calculated 
+    if calculate_modifications:
+        df = pd.merge(df, modifications_df, on='read_id', how='left')
+
+    # merge the polyA tail length calls if requested 
+    if calculate_polyA:
+        polyA_lengths = fetch_polyA_pt(bam_file)
+        polyA_df = pd.DataFrame(list(polyA_lengths.items()), columns=['read_id', 'PolyA_Length'])
+        df = pd.merge(df, polyA_df, on='read_id', how='left')
 
     # write df to a CSV file for testing
     df.to_csv(output_dir + "/test_df_end.csv", index=False)
@@ -136,6 +123,10 @@ if __name__ == "__main__":
     parser.add_argument('-b', '--bam_file', type=str, help='Path to the input bam file.')
     parser.add_argument('-g', '--gtf_file', type=str, help='Path to the GTF file.')
     parser.add_argument('-o', '--output_table', type=str, default=None, help='Optional path to the output file.')
+    parser.add_argument('-m', '--modifications', action='store_true', help='Calculate modifications data if this flag is present.')
+    parser.add_argument('-p', '--polyA', action='store_true', help='Calculate polyA tail lengths if this flag is present.')
+
+
 
     args = parser.parse_args()
 
@@ -143,6 +134,5 @@ if __name__ == "__main__":
     gtf_file = args.gtf_file 
     output_table = args.output_table
 
-    main(bam_file, gtf_file, output_table)
-
+    main(args.bam_file, args.gtf_file, args.output_table, args.modifications, args.polyA)
 

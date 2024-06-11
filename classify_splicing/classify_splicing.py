@@ -63,7 +63,7 @@ def main(input_file, output_file, gtf_file, splice_threshold, intron_positive_th
         (data['intronic_alignment'] <= intron_negative_threshold), 'spliced',
         np.where(
             (data['splice_count'] >= splice_threshold) & 
-            (data['intronic_alignment'] > intron_positive_threshold), 'partially-spliced',
+            (data['intronic_alignment'] > intron_positive_threshold), 'ambiguous',
             np.where(data['intronic_alignment'] > intron_positive_threshold, 'intron_retained', 'ambiguous')
         )
     )
