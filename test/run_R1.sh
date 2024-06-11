@@ -9,8 +9,7 @@ export output="${out_dir}/output_table.tsv"
 # run R1 without calculating modifications
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output}
 wc -l ${output}
-# 946 lines 
-# real    0m7.244s
+
 
 # run R1 while calculate modifications 
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -m

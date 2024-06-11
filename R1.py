@@ -1,65 +1,33 @@
 import sys
 import os
-import warnings
-import re 
 import argparse
-import subprocess
+import logging 
 import pandas as pd
-from pandas import isna 
-import numpy as np
 
-from tempfile import NamedTemporaryFile
-
-from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
-import concurrent.futures
-from scipy.cluster.hierarchy import fclusterdata
-from typing import Tuple
-from functools import partial
-import csv 
-
-from typing import Dict
-
-### local imports 
+# function imports 
 sys.path.append("/home/150/as7425/R1/read_classifier/")
-from bam_to_bed import bam_to_bed
 from process_genome import generate_genome_file, read_chromosomes_from_genome_file, filter_bed_by_chromosome_inplace
 from gtf_to_bed import gtf_to_bed, extend_gene_bed 
-from parallel_bed_operations import split_bed_file, write_sorted_chunk
 from intersect import run_bedtools
 from parse_intersect import parse_output
-from process_read_end_positions import calculate_distance_for_unique_positions, calculate_distance_to_annotated_ends
-from process_gtf import parse_attributes, parse_gtf_line, get_gene_exon_table, get_biotypes 
-from parse_classifications import parse_read_classification, summarize_error_cases, classify_read, print_classification_summary
+from process_read_end_positions import calculate_distance_to_annotated_ends
+from process_gtf import get_biotypes 
+from parse_classifications import parse_read_classification, print_classification_summary
 
-### mod table 
 sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
 from map_mm_tag_to_genome_position import extract_modifications
 from extract_polyA_length import fetch_polyA_pt
 
 # set logging level 
-import logging 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-# main 
+
 def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA):
 
-    # fetch output directory 
     output_dir = os.path.dirname(output_table) 
 
     # generate a genome file for bedtools sort 
     genome_file = generate_genome_file(bam_file, output_dir) 
-
-    # calculate mod probs if flag is set 
-    if calculate_modifications:
-        modifications_dict = {}
-        for modification in extract_modifications(bam_file):
-            if modification is not None:
-                read_id, reference, strand, mods = modification.split('\t')
-                modifications_dict[read_id] = mods
-            else:
-                modifications_dict[read_id] = "No modifications or missing tags"
-        modifications_df = pd.DataFrame(list(modifications_dict.items()), columns=['read_id', 'Modifications'])
-        print(modifications_df.head())
 
     # create a bed file of gene regions
     gene_bed_file = gtf_to_bed(gtf_file, "gene", output_dir) 
@@ -77,20 +45,27 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     # parse the bedtools intersect files 
     df = parse_output(intersect_files[0], intersect_files[1], intersect_files[2], intersect_files[3], intersect_files[4])
     
-    # merge the modifications if mods are calculated 
+    # extract and merge the modifications if mods are calculated 
     if calculate_modifications:
+        modifications_dict = {}
+        for modification in extract_modifications(bam_file):
+            if modification is not None:
+                read_id, reference, strand, mods = modification.split('\t')
+                modifications_dict[read_id] = mods
+            else:
+                modifications_dict[read_id] = "No modifications or missing tags"
+        modifications_df = pd.DataFrame(list(modifications_dict.items()), columns=['read_id', 'Modifications'])
+        print(modifications_df.head())
         df = pd.merge(df, modifications_df, on='read_id', how='left')
 
     # merge the polyA tail length calls if requested 
     if calculate_polyA:
         polyA_lengths = fetch_polyA_pt(bam_file)
-        polyA_df = pd.DataFrame(list(polyA_lengths.items()), columns=['read_id', 'PolyA_Length'])
+        polyA_df = pd.DataFrame(list(polyA_lengths.items()), columns=['read_id', 'polya_length'])
         df = pd.merge(df, polyA_df, on='read_id', how='left')
 
-    # write df to a CSV file for testing
-    df.to_csv(output_dir + "/test_df_end.csv", index=False)
-    
-    # fetch distances to nearest transcript end sites 
+
+    # calculate distances to nearest transcript end sites 
     end_position_df = calculate_distance_to_annotated_ends(df, gtf_file, output_dir)
 
     # save the output as CSV 

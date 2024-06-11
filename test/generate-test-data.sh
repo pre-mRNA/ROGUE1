@@ -2,7 +2,7 @@
 
 # Gene of interest
 export target_gene=$1
-# target_gene="SRSF3"
+target_gene="ACTG1"
 
 export bam_in="/g/data/lf10/as7425/2023_mrna-biogenesis-maps/analysis/2024-03-28_ASR012_HeLa-total-RNA004-rep1/ASR012_HeLa-total-RNA004-rep1_primary_genome_alignments_modCalled.bam"
 export anno_in="/g/data/lf10/as7425/genomes/human_genome/ensembl_release_110/Homo_sapiens.GRCh38.110.chr.gtf"
