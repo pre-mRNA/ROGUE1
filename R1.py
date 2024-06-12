@@ -3,6 +3,7 @@ import os
 import argparse
 import logging 
 import pandas as pd
+import multiprocessing
 
 # function imports 
 sys.path.append("/home/150/as7425/R1/read_classifier/")
@@ -13,6 +14,7 @@ from parse_intersect import parse_output
 from process_read_end_positions import calculate_distance_to_annotated_ends
 from process_gtf import get_biotypes 
 from parse_classifications import parse_read_classification, print_classification_summary
+from extract_junctions import parallel_extract_splice_junctions, summarize_junctions, filter_junctions 
 
 sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
 from map_mm_tag_to_genome_position import extract_modifications
@@ -21,8 +23,10 @@ from extract_polyA_length import fetch_polyA_pt
 # set logging level 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
+# get cpu count
+cpu_count = multiprocessing.cpu_count()
 
-def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA):
+def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA, junction_distance):
 
     output_dir = os.path.dirname(output_table) 
 
@@ -45,6 +49,9 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     # parse the bedtools intersect files 
     df = parse_output(intersect_files[0], intersect_files[1], intersect_files[2], intersect_files[3], intersect_files[4])
     
+    # store a dict of read_id and gene_id 
+    gene_id_map = df.set_index('read_id')['gene_id'].to_dict()
+
     # extract and merge the modifications if mods are calculated 
     if calculate_modifications:
         modifications_dict = {}
@@ -64,6 +71,26 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
         polyA_df = pd.DataFrame(list(polyA_lengths.items()), columns=['read_id', 'polya_length'])
         df = pd.merge(df, polyA_df, on='read_id', how='left')
 
+    # calculate distance to junctions if requested 
+    if junction_distance: 
+
+        # extract all junctions 
+        all_junctions = parallel_extract_splice_junctions(bam_file, num_cpus = cpu_count, gene_id_map=gene_id_map)
+        all_junctions.to_csv(output_dir + "/all_junctions.bed", sep="\t", index=False)
+
+        # collapse to unique junctions with support level of at least 2 alignments 
+        collapsed_junctions = summarize_junctions(all_junctions, 2)
+
+        # save junctions to bed file for future inspection 
+        collapsed_junctions.to_csv(output_dir + "/collapsed_junctions.bed", sep="\t", index=False)
+
+        # filter junctions
+        final_junctions = filter_junctions(collapsed_junctions)
+
+        # save junctions 
+        with open(output_dir + "/final_junctions.bed", 'w') as file:
+            file.write("track name=junctions\n")
+            final_junctions[['Chromosome', 'Start', 'End', 'Gene_ID', 'Counts', 'Strand']].to_csv(file, sep='\t', index=False, header=False)
 
     # calculate distances to nearest transcript end sites 
     end_position_df = calculate_distance_to_annotated_ends(df, gtf_file, output_dir)
@@ -72,25 +99,25 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     end_position_df.to_csv(output_table, sep="\t", index=False)
 
     # fetch the gene biotypes 
-    biotypes = get_biotypes(gtf_file)
+    # biotypes = get_biotypes(gtf_file)
 
     # classify each read 
-    result_df = parse_read_classification(output_table, biotypes)
+    # result_df = parse_read_classification(output_table, biotypes)
 
     # print some summary statistics 
-    print_classification_summary(result_df)
+    # print_classification_summary(result_df)
 
-    # Rename 'exon_count' to 'annotated_exon_count'
-    result_df.rename(columns={'exon_count': 'annotated_exon_count'}, inplace=True)
+    # # Rename 'exon_count' to 'annotated_exon_count'
+    # result_df.rename(columns={'exon_count': 'annotated_exon_count'}, inplace=True)
 
-    # omit specific columns from output 
-    # columns_to_omit = ['read_end_strand', 'strand_sign', 'chromosome', 'position', 'strand', 'biotypes_info']
-    # keep biotypes for now?
-    columns_to_omit = ['read_end_strand', 'strand_sign', 'chromosome', 'position', 'strand']  
-    result_df.drop(columns=columns_to_omit, inplace=True)
+    # # omit specific columns from output 
+    # # columns_to_omit = ['read_end_strand', 'strand_sign', 'chromosome', 'position', 'strand', 'biotypes_info']
+    # # keep biotypes for now?
+    # columns_to_omit = ['read_end_strand', 'strand_sign', 'chromosome', 'position', 'strand']  
+    # result_df.drop(columns=columns_to_omit, inplace=True)
 
-    # Save the table to output
-    result_df.to_csv(output_table, sep='\t', index=False)
+    # # Save the table to output
+    # result_df.to_csv(output_table, sep='\t', index=False)
 
 if __name__ == "__main__":
     
@@ -100,8 +127,7 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output_table', type=str, default=None, help='Optional path to the output file.')
     parser.add_argument('-m', '--modifications', action='store_true', help='Calculate modifications data if this flag is present.')
     parser.add_argument('-p', '--polyA', action='store_true', help='Calculate polyA tail lengths if this flag is present.')
-
-
+    parser.add_argument('-j', '--junction_distance', action='store_true', help='Calculate distance between read 3 prime end and splice donors.')
 
     args = parser.parse_args()
 
@@ -109,5 +135,5 @@ if __name__ == "__main__":
     gtf_file = args.gtf_file 
     output_table = args.output_table
 
-    main(args.bam_file, args.gtf_file, args.output_table, args.modifications, args.polyA)
+    main(args.bam_file, args.gtf_file, args.output_table, args.modifications, args.polyA, args.junction_distance)
 
