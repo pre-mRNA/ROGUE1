@@ -177,6 +177,8 @@ def filter_junctions(df, overlap_threshold=0.60, frequency_threshold=0.002, num_
     print(f"Filtered out {len(to_remove)} introns based on overlap threshold and frequency disparity.")
     print(f"Remaining introns: {len(filtered_final)}")
 
+    filtered_final = filtered_final.reindex(columns=['Chromosome', 'Start', 'End', 'Gene_ID', 'Counts', 'Strand'])
+
     return filtered_final
 
 # # BENCHMARKING

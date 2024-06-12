@@ -89,7 +89,7 @@ def calculate_distance_for_unique_positions(unique_positions: pd.DataFrame, tran
 
 def calculate_distance_to_read_ends(df: pd.DataFrame, target_feature, feature_name) -> pd.DataFrame:
    
-    logging.info("Calculating distance between read ends and {feature_name}")
+    logging.info(f"Calculating distance between read ends and {feature_name}")
     
     try:
         # create an index of unique read end positions 

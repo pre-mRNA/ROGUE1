@@ -14,10 +14,7 @@ export output="${out_dir}/output_table.tsv"
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j 
 
 
-wc -l ${output}
-
-
-# run R1 while calculate modifications 
+# run R1 while calculating modifications 
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -m -j 
 wc -l ${output}
 # 946 lines 

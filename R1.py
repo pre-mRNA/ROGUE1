@@ -90,9 +90,16 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
         # save junctions 
         with open(output_dir + "/final_junctions.bed", 'w') as file:
             file.write("track name=junctions\n")
-            final_junctions[['Chromosome', 'Start', 'End', 'Gene_ID', 'Counts', 'Strand']].to_csv(file, sep='\t', index=False, header=False)
+            final_junctions.to_csv(file, sep='\t', index=False, header=False)
 
-    
+        # convert junctions to donor final nucelotides 
+        splice_donors = final_junctions.assign(
+            Start=lambda df: df.apply(lambda x: x['Start'] - 1 if x['Strand'] == '+' else x['End'], axis=1),
+            End=lambda df: df.apply(lambda x: x['Start'] if x['Strand'] == '+' else x['End'] + 1, axis=1)
+        ).rename(columns={'Chromosome': 'chromosome', 'Start': 'position', 'Strand': 'strand'})
+
+        # calculate distances to nearest splice donors 
+        df = calculate_distance_to_read_ends(df, splice_donors, "splice_donors")
 
     # calculate distances between read ends and nearest transcript end sites 
     transcript_ends = get_transcript_ends(gtf_file, output_dir)
