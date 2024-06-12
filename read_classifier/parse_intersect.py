@@ -194,4 +194,13 @@ def parse_output(exon_overlap_file, gene_overlap_file, dog_overlap_file, bed_fil
     # replace missing values in gene_overlap_sum
     gene_overlap_sum = gene_overlap_sum.fillna({'gene_id': np.nan, 'read_length': 0, 'alignment_length': 0, 'splice_count': 0,'gene_base_overlap': 0, 'exon_base_overlap': 0, 'intronic_alignment': 0, 'DOG_overlap': 0, 'unclassified_length': 0, 'unaligned_length': 0})
 
+    # read in the parsed bedtools intersect output 
+    gene_overlap_sum[['read_end_chromosome', 'read_end_position', 'read_end_strand']] = gene_overlap_sum['end_coordinates'].str.split(':', expand=True)
+    gene_overlap_sum['read_end_position'] = gene_overlap_sum['read_end_position'].astype(int)
+    gene_overlap_sum.drop(columns=['end_coordinates'], inplace=True)
+    gene_overlap_sum['strand_sign'] = gene_overlap_sum['read_end_strand'].map({'+': 1, '-': -1})
+
+    if 'read_end_chromosome' not in gene_overlap_sum.columns:
+        raise ValueError("The expected 'read_end_chromosome' column is missing after split and processing.")
+
     return gene_overlap_sum

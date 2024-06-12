@@ -11,7 +11,7 @@ from process_genome import generate_genome_file, read_chromosomes_from_genome_fi
 from gtf_to_bed import gtf_to_bed, extend_gene_bed 
 from intersect import run_bedtools
 from parse_intersect import parse_output
-from process_read_end_positions import calculate_distance_to_annotated_ends
+from process_read_end_positions import calculate_distance_to_read_ends, get_transcript_ends
 from process_gtf import get_biotypes 
 from parse_classifications import parse_read_classification, print_classification_summary
 from extract_junctions import parallel_extract_splice_junctions, summarize_junctions, filter_junctions 
@@ -92,8 +92,11 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
             file.write("track name=junctions\n")
             final_junctions[['Chromosome', 'Start', 'End', 'Gene_ID', 'Counts', 'Strand']].to_csv(file, sep='\t', index=False, header=False)
 
-    # calculate distances to nearest transcript end sites 
-    end_position_df = calculate_distance_to_annotated_ends(df, gtf_file, output_dir)
+    
+
+    # calculate distances between read ends and nearest transcript end sites 
+    transcript_ends = get_transcript_ends(gtf_file, output_dir)
+    end_position_df = calculate_distance_to_read_ends(df, transcript_ends, "polyA")
 
     # save the output as CSV 
     end_position_df.to_csv(output_table, sep="\t", index=False)

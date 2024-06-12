@@ -6,11 +6,24 @@ import numpy as np
 import logging 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-
-
 from gtf_to_bed import gtf_to_bed
 
-def calculate_distance_for_unique_positions(unique_positions: pd.DataFrame, transcript_end_coordinates: pd.DataFrame) -> pd.DataFrame:
+def get_transcript_ends(gtf_file, output_dir): 
+
+    # extract the annotated trascript end sites from the gtf file 
+    bed_file = gtf_to_bed(gtf_file, 'transcript', output_dir)
+    
+    transcript_end_coordinates = pd.read_csv(
+        bed_file, sep='\t', header=None,
+        names=['chromosome', 'position', 'end_position', 'transcript_id', 'gene_id', 'strand']
+    ).astype({'position': 'int32', 'end_position': 'int32'})
+
+    logging.info(f"Extracted {len(transcript_end_coordinates)} features from BED file.")
+
+    return transcript_end_coordinates
+
+
+def calculate_distance_for_unique_positions(unique_positions: pd.DataFrame, transcript_end_coordinates: pd.DataFrame, feature_name) -> pd.DataFrame:
     logging.info("ran calculate_distance_for_unique_positions")
     
     try:
@@ -57,53 +70,40 @@ def calculate_distance_for_unique_positions(unique_positions: pd.DataFrame, tran
         # logging.info("upstream")
         # print(merged_df_upstream.head())
 
-        merged_df_downstream['downstream_distance'] = (merged_df_downstream['position'] - merged_df_downstream['read_end_position']) * strand_sign
-        merged_df_upstream['upstream_distance'] = (merged_df_upstream['position'] - merged_df_upstream['read_end_position']) * strand_sign
+        # append the feature name
+        merged_df_downstream[f'{feature_name}_downstream_distance'] = (merged_df_downstream['position'] - merged_df_downstream['read_end_position']) * strand_sign
+        merged_df_upstream[f'{feature_name}_upstream_distance'] = (merged_df_upstream['position'] - merged_df_upstream['read_end_position']) * strand_sign
 
         merged_df = pd.merge(
-            merged_df_downstream[['read_end_chromosome', 'read_end_position', 'read_end_strand', 'downstream_distance']],
-            merged_df_upstream[['read_end_chromosome', 'read_end_position', 'read_end_strand', 'upstream_distance']],
+            merged_df_downstream[['read_end_chromosome', 'read_end_position', 'read_end_strand', f'{feature_name}_downstream_distance']],
+            merged_df_upstream[['read_end_chromosome', 'read_end_position', 'read_end_strand', f'{feature_name}_upstream_distance']],
             on=['read_end_chromosome', 'read_end_position', 'read_end_strand'],
             validate="one_to_one"
         )
         return merged_df
     
+    
     except Exception as e:
         print(f"An error occurred: {e}")
         return pd.DataFrame()
 
-def calculate_distance_to_annotated_ends(df: pd.DataFrame, gtf_file: str, output_dir: str) -> pd.DataFrame:
-    logging.info("Calculating distance to annotated transcript ends")
+def calculate_distance_to_read_ends(df: pd.DataFrame, target_feature, feature_name) -> pd.DataFrame:
+   
+    logging.info("Calculating distance between read ends and {feature_name}")
+    
     try:
-
-        # extract the annotated trascript end sites from the gtf file 
-        bed_file = gtf_to_bed(gtf_file, 'transcript', output_dir)
-        
-        transcript_end_coordinates = pd.read_csv(
-            bed_file, sep='\t', header=None,
-            names=['chromosome', 'position', 'end_position', 'transcript_id', 'gene_id', 'strand']
-        ).astype({'position': 'int32', 'end_position': 'int32'})
-
-        # read in the parsed bedtools intersect output 
-        df[['read_end_chromosome', 'read_end_position', 'read_end_strand']] = df['end_coordinates'].str.split(':', expand=True)
-        df['read_end_position'] = df['read_end_position'].astype(int)
-        df.drop(columns=['end_coordinates'], inplace=True)
-        df['strand_sign'] = df['read_end_strand'].map({'+': 1, '-': -1})
-
-        if 'read_end_chromosome' not in df.columns:
-            raise ValueError("The expected 'read_end_chromosome' column is missing after split and processing.")
-
         # create an index of unique read end positions 
         # we only calculate distances for the unique read end postitions to save some computational load 
         unique_positions = df[['read_end_chromosome', 'read_end_position', 'read_end_strand', 'strand_sign']].drop_duplicates()
         print(f"Unique positions extracted: {len(unique_positions)} records.")
 
-        print(unique_positions.head())
+        # print(unique_positions.head())
+        
         results = []
         
         # in parallel, calculate the minimum distance between read end positions and annotated transcripts end sites 
         with ProcessPoolExecutor() as executor:
-            future_to_position = {executor.submit(calculate_distance_for_unique_positions, group, transcript_end_coordinates): group for _, group in unique_positions.groupby(['read_end_chromosome', 'strand_sign'])}
+            future_to_position = {executor.submit(calculate_distance_for_unique_positions, group, target_feature, feature_name): group for _, group in unique_positions.groupby(['read_end_chromosome', 'strand_sign'])}
             for future in as_completed(future_to_position):
                 result = future.result()
                 if not result.empty:
