@@ -106,8 +106,10 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     biotypes_df = pd.DataFrame(list(biotypes.items()), columns=['gene_id', 'biotype_info'])
     # print(biotypes_df.head())
     df = pd.merge(df, biotypes_df, on='gene_id', how='left')
+    df['biotype_info'] = df['biotype_info'].apply(lambda x: x if isinstance(x, dict) else {})
     df_biotype_expanded = pd.json_normalize(df['biotype_info'])
     df = pd.concat([df.drop('biotype_info', axis=1), df_biotype_expanded], axis=1)
+    df.fillna({'biotype': 'unknown', 'gene_name': 'unknown', 'exon_count': 0}, inplace=True)
 
     # calculate distances between read ends and nearest transcript end sites 
     transcript_ends = get_transcript_ends(gtf_file, output_dir)
