@@ -11,7 +11,7 @@ export output="${out_dir}/output_table.tsv"
 # gtf="/home/150/as7425/R1/test/data/merged.gtf"
 
 # run R1 without calculating modifications
-time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j >${output}/ROGue1-log.txt 2>&1
+time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j > ${out_dir}/ROGUE1-log.txt 2>&1
 
 
 # run R1 while calculating modifications 

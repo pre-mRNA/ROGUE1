@@ -101,15 +101,20 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
         # calculate distances to nearest splice donors 
         df = calculate_distance_to_read_ends(df, splice_donors, "splice_donors")
 
+    # fetch the gene biotypes 
+    biotypes = get_biotypes(gtf_file)
+    biotypes_df = pd.DataFrame(list(biotypes.items()), columns=['gene_id', 'biotype_info'])
+    # print(biotypes_df.head())
+    df = pd.merge(df, biotypes_df, on='gene_id', how='left')
+    df_biotype_expanded = pd.json_normalize(df['biotype_info'])
+    df = pd.concat([df.drop('biotype_info', axis=1), df_biotype_expanded], axis=1)
+
     # calculate distances between read ends and nearest transcript end sites 
     transcript_ends = get_transcript_ends(gtf_file, output_dir)
     end_position_df = calculate_distance_to_read_ends(df, transcript_ends, "polyA")
 
     # save the output as CSV 
     end_position_df.to_csv(output_table, sep="\t", index=False)
-
-    # fetch the gene biotypes 
-    # biotypes = get_biotypes(gtf_file)
 
     # classify each read 
     # result_df = parse_read_classification(output_table, biotypes)
