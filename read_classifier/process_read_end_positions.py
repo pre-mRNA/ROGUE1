@@ -33,12 +33,12 @@ def calculate_distance_for_unique_positions(unique_positions: pd.DataFrame, tran
         
         strand_sign = unique_positions['strand_sign'].iloc[0]
         
-        transcript_end_coordinates_chunk = transcript_end_coordinates[
-            transcript_end_coordinates['strand'] == ('+' if strand_sign == 1 else '-')
-        ]
-        transcript_end_coordinates_chunk.rename(columns={'chromosome': 'read_end_chromosome'}, inplace=True)
-        transcript_end_coordinates_chunk['read_end_chromosome'] = transcript_end_coordinates_chunk['read_end_chromosome'].astype(str)
-        transcript_end_coordinates_chunk['position'] = transcript_end_coordinates_chunk['position'].astype('int64')
+        # using .loc to avoid potential warnings
+        transcript_end_coordinates_chunk = transcript_end_coordinates.loc[
+            transcript_end_coordinates['strand'] == ('+' if strand_sign == 1 else '-'), :
+        ].copy()
+        transcript_end_coordinates_chunk.loc[:, 'read_end_chromosome'] = transcript_end_coordinates_chunk['chromosome'].astype(str)
+        transcript_end_coordinates_chunk.loc[:, 'position'] = transcript_end_coordinates_chunk['position'].astype('int64')
 
         # logging.info("TES chunk head")
         # print(transcript_end_coordinates_chunk.head())
