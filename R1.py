@@ -30,6 +30,13 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
 
     output_dir = os.path.dirname(output_table) 
 
+    # check if the output directory exists and is writeable and print to log
+    if not os.path.exists(output_dir):
+        logging.info(f"Output directory {output_dir} does not exist. Creating it now.")
+        os.makedirs(output_dir)
+    else:
+        logging.info(f"Output directory for ROGUE1 table is {output_dir}.")
+
     # generate a genome file for bedtools sort 
     genome_file = generate_genome_file(bam_file, output_dir) 
 
@@ -151,6 +158,7 @@ if __name__ == "__main__":
     bam_file = args.bam_file
     gtf_file = args.gtf_file 
     output_table = args.output_table
-
+    
+    
     main(args.bam_file, args.gtf_file, args.output_table, args.modifications, args.polyA, args.junction_distance)
 
