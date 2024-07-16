@@ -45,7 +45,7 @@ def calculate_color_quantized(pt_value, low_threshold, high_threshold):
     gray_color = "128,128,128"  # RGB for grey
 
     if pt_value == -1:
-        return gray_color, 1
+        return gray_color, 2
     if pt_value <= low_threshold:
         return "255,0,0", 0  # red
     elif pt_value >= high_threshold:    
