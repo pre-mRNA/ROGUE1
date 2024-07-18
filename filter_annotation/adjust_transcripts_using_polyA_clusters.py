@@ -40,7 +40,7 @@ def find_downstream_positions(clusters_df, gene_df):
         
         if gene_strand == '+':
             valid_clusters = valid_clusters[valid_clusters['start'] >= gene_start]
-        else:  # minus strand
+        else:  
             valid_clusters = valid_clusters[valid_clusters['end'] <= gene_end]
         
         if not valid_clusters.empty:
@@ -73,96 +73,66 @@ def number_exons_and_introns(exons, introns, gene_id, strand):
     return numbered_exons, numbered_introns
 
 def adjust_regions_for_gene(gene_id, exon_df, intron_df, dog_df, gene_df, cluster, window=5):
-    if cluster is None:
-        return (
-            exon_df[exon_df['gene_id'] == gene_id],
-            intron_df[intron_df['gene_id'] == gene_id],
-            dog_df[dog_df['gene_id'] == gene_id],
-            gene_df[gene_df['gene_id'] == gene_id],
-            pd.DataFrame(),
-            None
-        )
-    
     gene_exons = exon_df[exon_df['gene_id'] == gene_id].sort_values('start')
     gene_introns = intron_df[intron_df['gene_id'] == gene_id].sort_values('start')
     gene_dog = dog_df[dog_df['gene_id'] == gene_id]
     gene_entry = gene_df[gene_df['gene_id'] == gene_id].iloc[0]
     
-    pas_position = cluster['end'] if cluster['strand'] == '+' else cluster['start']
-    
-    if (cluster['strand'] == '+' and pas_position < gene_entry['start']) or \
-       (cluster['strand'] == '-' and pas_position > gene_entry['end']):
-        return (
-            gene_exons,
-            gene_introns,
-            gene_dog,
-            pd.DataFrame([gene_entry]),
-            pd.DataFrame(),
-            f"PAS position {pas_position} is {'before' if cluster['strand'] == '+' else 'after'} gene {'start' if cluster['strand'] == '+' else 'end'} {gene_entry['start' if cluster['strand'] == '+' else 'end']} for gene {gene_id}"
-        )
-
-    if cluster['strand'] == '+':
-        containing_exon = gene_exons[(gene_exons['start'] <= pas_position) & (gene_exons['end'] > pas_position)]
-        containing_intron = gene_introns[(gene_introns['start'] <= pas_position) & (gene_introns['end'] > pas_position)]
+    if cluster is None:
+        exons_to_keep = gene_exons
+        introns_to_keep = gene_introns
+        new_dog = gene_dog
+        new_gene_entry = gene_entry
+        error_message = None
+    else:
+        pas_position = cluster['end'] if cluster['strand'] == '+' else cluster['start']
         
-        if not containing_exon.empty:
-            last_exon = containing_exon.iloc[0].copy()
-            last_exon['end'] = pas_position
-            exons_to_keep = gene_exons[gene_exons['end'] <= pas_position]
-            exons_to_keep = pd.concat([exons_to_keep, pd.DataFrame([last_exon])])
-        elif not containing_intron.empty:
-            last_exon = gene_exons[gene_exons['end'] <= pas_position].iloc[-1].copy()
-            last_exon['end'] = pas_position
-            exons_to_keep = gene_exons[gene_exons['end'] < pas_position]
-            exons_to_keep = pd.concat([exons_to_keep, pd.DataFrame([last_exon])])
-        else:
+        # check for upstream clusters
+        if (cluster['strand'] == '+' and pas_position < gene_entry['start']) or \
+           (cluster['strand'] == '-' and pas_position > gene_entry['end']):
             exons_to_keep = gene_exons
-        
-        introns_to_keep = gene_introns[gene_introns['end'] < pas_position]
-        
-        new_dog_start = pas_position + window
-        new_dog_end = new_dog_start + (gene_dog['end'].iloc[0] - gene_dog['start'].iloc[0]) if not gene_dog.empty else new_dog_start + window
-        
-        new_gene_entry = gene_entry.copy()
-        new_gene_entry['end'] = pas_position
-        
-    else:  # minus strand
-        containing_exon = gene_exons[(gene_exons['start'] < pas_position) & (gene_exons['end'] >= pas_position)]
-        containing_intron = gene_introns[(gene_introns['start'] < pas_position) & (gene_introns['end'] >= pas_position)]
-        
-        if not containing_exon.empty:
-            first_exon = containing_exon.iloc[0].copy()
-            first_exon['start'] = pas_position
-            exons_to_keep = gene_exons[gene_exons['start'] >= pas_position]
-            exons_to_keep = pd.concat([pd.DataFrame([first_exon]), exons_to_keep])
-        elif not containing_intron.empty:
-            first_exon = gene_exons[gene_exons['start'] >= pas_position].iloc[0].copy()
-            first_exon['start'] = pas_position
-            exons_to_keep = gene_exons[gene_exons['start'] > pas_position]
-            exons_to_keep = pd.concat([pd.DataFrame([first_exon]), exons_to_keep])
+            introns_to_keep = gene_introns
+            new_dog = gene_dog
+            new_gene_entry = gene_entry
+            error_message = f"PAS position {pas_position} is {'before' if cluster['strand'] == '+' else 'after'} gene {'start' if cluster['strand'] == '+' else 'end'} {gene_entry['start' if cluster['strand'] == '+' else 'end']} for gene {gene_id}"
         else:
-            exons_to_keep = gene_exons
-        
-        introns_to_keep = gene_introns[gene_introns['start'] > pas_position]
-        
-        new_dog_end = pas_position - window
-        new_dog_start = new_dog_end - (gene_dog['end'].iloc[0] - gene_dog['start'].iloc[0]) if not gene_dog.empty else new_dog_end - window
-        
-        new_gene_entry = gene_entry.copy()
-        new_gene_entry['start'] = pas_position
+            if cluster['strand'] == '+':
+                exons_to_keep = gene_exons[gene_exons['end'] <= pas_position]
+                introns_to_keep = gene_introns[gene_introns['end'] < pas_position]
+                if not exons_to_keep.empty:
+                    last_exon = exons_to_keep.iloc[-1].copy()
+                    last_exon['end'] = pas_position
+                    exons_to_keep = pd.concat([exons_to_keep[:-1], pd.DataFrame([last_exon])])
+                new_dog_start = pas_position + window
+                new_dog_end = new_dog_start + (gene_dog['end'].iloc[0] - gene_dog['start'].iloc[0]) if not gene_dog.empty else new_dog_start + window
+                new_gene_entry = gene_entry.copy()
+                new_gene_entry['end'] = pas_position
+            else:  
+                exons_to_keep = gene_exons[gene_exons['start'] >= pas_position]
+                introns_to_keep = gene_introns[gene_introns['start'] > pas_position]
+                if not exons_to_keep.empty:
+                    first_exon = exons_to_keep.iloc[0].copy()
+                    first_exon['start'] = pas_position
+                    exons_to_keep = pd.concat([pd.DataFrame([first_exon]), exons_to_keep[1:]])
+                new_dog_end = pas_position - window
+                new_dog_start = new_dog_end - (gene_dog['end'].iloc[0] - gene_dog['start'].iloc[0]) if not gene_dog.empty else new_dog_end - window
+                new_gene_entry = gene_entry.copy()
+                new_gene_entry['start'] = pas_position
+            
+            new_dog = pd.DataFrame({
+                'chrom': cluster['chrom'],
+                'start': new_dog_start,
+                'end': new_dog_end,
+                'gene_id': gene_id,
+                'score': gene_dog['score'].iloc[0] if not gene_dog.empty else '.',
+                'strand': cluster['strand']
+            }, index=[0])
+            error_message = None
 
-    new_dog = pd.DataFrame({
-        'chrom': cluster['chrom'],
-        'start': new_dog_start,
-        'end': new_dog_end,
-        'gene_id': gene_id,
-        'score': gene_dog['score'].iloc[0] if not gene_dog.empty else '.',
-        'strand': cluster['strand']
-    }, index=[0])
-    
-    exons_to_keep, introns_to_keep = number_exons_and_introns(exons_to_keep, introns_to_keep, gene_id, cluster['strand'] if cluster else gene_entry['strand'])
+    # number the exons and introns
+    numbered_exons, numbered_introns = number_exons_and_introns(exons_to_keep, introns_to_keep, gene_id, gene_entry['strand'])
 
-    return exons_to_keep, introns_to_keep, new_dog, pd.DataFrame([new_gene_entry]), pd.DataFrame([cluster]) if cluster else pd.DataFrame(), None
+    return numbered_exons, numbered_introns, new_dog, pd.DataFrame([new_gene_entry]), pd.DataFrame([cluster]) if cluster else pd.DataFrame(), error_message
 
 def process_gene_chunk(chunk_data):
     exon_df, intron_df, dog_df, gene_df, downstream_positions_dict, window, gene_ids_chunk = chunk_data
@@ -176,46 +146,43 @@ def process_gene_chunk(chunk_data):
         gene_chrom = gene_info['chrom']
         gene_strand = gene_info['strand']
         
+ 
         gene_clusters = downstream_positions_dict.get(gene_id, [])
         
+        # check for incompatible chromosomes
         cross_chrom_count = sum(1 for c in gene_clusters if c['chrom'] != gene_chrom)
         if cross_chrom_count > 0:
             cross_chromosome_clusters[gene_id] = cross_chrom_count
         
+        # filter for correct chromosome and strand
         valid_clusters = [c for c in gene_clusters if c['chrom'] == gene_chrom and c['strand'] == gene_strand]
         
+        # select most downstream valid cluster 
         cluster = None
         if valid_clusters:
             if gene_strand == '+':
                 cluster = max(valid_clusters, key=lambda x: x['end'])
-            else:  # minus strand
+            else:  # '-' strand
                 cluster = min(valid_clusters, key=lambda x: x['start'])
         
+        exon, intron, dog, gene, cluster_data, error_message = adjust_regions_for_gene(gene_id, exon_df, intron_df, dog_df, gene_df, cluster, window)
+        chunk_exons.append(exon)
+        chunk_introns.append(intron)
+        chunk_dogs.append(dog)
+        chunk_genes.append(gene)
+        chunk_clusters.append(cluster_data)
+        if error_message:
+            discordant_pas.append(error_message)
+        
         if cluster is None:
-            
-            # return original gene structure if no valid clusters
             genes_without_valid_clusters.append(gene_id)
-            chunk_exons.append(exon_df[exon_df['gene_id'] == gene_id])
-            chunk_introns.append(intron_df[intron_df['gene_id'] == gene_id])
-            chunk_dogs.append(dog_df[dog_df['gene_id'] == gene_id])
-            chunk_genes.append(pd.DataFrame([gene_info]))
-            chunk_clusters.append(pd.DataFrame())
-        else:
-            exon, intron, dog, gene, cluster_data, error_message = adjust_regions_for_gene(gene_id, exon_df, intron_df, dog_df, gene_df, cluster, window)
-            chunk_exons.append(exon)
-            chunk_introns.append(intron)
-            chunk_dogs.append(dog)
-            chunk_genes.append(gene)
-            chunk_clusters.append(cluster_data)
-            if error_message:
-                discordant_pas.append(error_message)
     
     return (
-        pd.concat(chunk_exons),
-        pd.concat(chunk_introns),
-        pd.concat(chunk_dogs),
-        pd.concat(chunk_genes),
-        pd.concat(chunk_clusters),
+        pd.concat(chunk_exons, ignore_index=True),
+        pd.concat(chunk_introns, ignore_index=True),
+        pd.concat(chunk_dogs, ignore_index=True),
+        pd.concat(chunk_genes, ignore_index=True),
+        pd.concat(chunk_clusters, ignore_index=True),
         discordant_pas,
         dict(cross_chromosome_clusters),
         genes_without_valid_clusters
@@ -274,7 +241,6 @@ def main():
     all_discordant_pas = [item for sublist in all_discordant_pas for item in sublist]
     all_genes_without_valid_clusters = [item for sublist in all_genes_without_valid_clusters for item in sublist]
 
-    # merge cross-chromosome dictionaries
     merged_cross_chromosome = {}
     for d in all_cross_chromosome:
         for gene, count in d.items():
@@ -283,16 +249,16 @@ def main():
             else:
                 merged_cross_chromosome[gene] = count
 
-
     os.makedirs(args.output_dir, exist_ok=True)
 
-    final_exons.to_csv(os.path.join(args.output_dir, 'updated_exon.bed'), sep='\t', header=False, index=False)
-    final_introns.to_csv(os.path.join(args.output_dir, 'updated_intron.bed'), sep='\t', header=False, index=False)
+    final_exons.to_csv(os.path.join(args.output_dir, 'updated_exon.bed'), sep='\t', header=False, index=False, 
+                       columns=['chrom', 'start', 'end', 'name', 'score', 'strand'])
+    final_introns.to_csv(os.path.join(args.output_dir, 'updated_intron.bed'), sep='\t', header=False, index=False, 
+                         columns=['chrom', 'start', 'end', 'name', 'score', 'strand'])
     final_dogs.to_csv(os.path.join(args.output_dir, 'updated_downstream_of_gene.bed'), sep='\t', header=False, index=False)
     final_genes.to_csv(os.path.join(args.output_dir, 'updated_gene.bed'), sep='\t', header=False, index=False)
     final_clusters.to_csv(os.path.join(args.output_dir, 'PAS.bed'), sep='\t', header=False, index=False)
 
-    # log discordant PAS, cross-chromosome clusters, and genes without valid clusters
     log_file = os.path.join(args.output_dir, 'processing_log.txt')
     with open(log_file, 'w') as f:
         f.write(f"Total discordant PAS: {len(all_discordant_pas)}\n\n")
