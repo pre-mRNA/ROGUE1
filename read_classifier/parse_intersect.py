@@ -140,29 +140,28 @@ def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_
     if record_exons:
         read_exon_ids = defaultdict(lambda: defaultdict(set))
         read_intron_ids = defaultdict(lambda: defaultdict(set))
-        
+
         for _, row in exon_df.iterrows():
-            read_exon_ids[row['read_id']][row['exon_gene_id']].add(row['exon_id'])
-        
+            
+            # check for valid gene_id assignment
+            if top_gene.get(row['read_id']):
+                read_exon_ids[row['read_id']][row['exon_gene_id']].add(row['exon_id'])
+
         for _, row in intron_df.iterrows():
-            read_intron_ids[row['read_id']][row['intron_gene_id']].add(row['intron_id'])
+            
+            # check for valid gene_id assignment
+            if top_gene.get(row['read_id']):
+                read_intron_ids[row['read_id']][row['intron_gene_id']].add(row['intron_id'])
 
         def collapse_ids(id_set):
             return ','.join(sorted(set(id.split('_')[-1] for id in id_set)))
 
-        gene_overlap_sum['exon_ids'] = gene_overlap_sum.apply(lambda row: collapse_ids(read_exon_ids.get(row['read_id'], {}).get(row['gene_id'], [])), axis=1)
-        gene_overlap_sum['intron_ids'] = gene_overlap_sum.apply(lambda row: collapse_ids(read_intron_ids.get(row['read_id'], {}).get(row['gene_id'], [])), axis=1)
-
-        # check for gene_id consistency in the exon and intron overlaps 
-        def check_gene_id_consistency(row):
-            gene_id = row['gene_id']
-            exon_gene_id = row['exon_gene_id'] if pd.notna(row['exon_gene_id']) else gene_id
-            intron_gene_id = row['intron_gene_id'] if pd.notna(row['intron_gene_id']) else gene_id
-            if not (gene_id == exon_gene_id == intron_gene_id):
-                raise ValueError(f"Inconsistent gene_ids for read {row['read_id']}: gene={gene_id}, exon={exon_gene_id}, intron={intron_gene_id}")
-            return True
-
-        gene_overlap_sum.apply(check_gene_id_consistency, axis=1)
+        gene_overlap_sum['exon_ids'] = gene_overlap_sum.apply(
+            lambda row: collapse_ids(read_exon_ids.get(row['read_id'], {}).get(row['gene_id'], [])), axis=1
+        )
+        gene_overlap_sum['intron_ids'] = gene_overlap_sum.apply(
+            lambda row: collapse_ids(read_intron_ids.get(row['read_id'], {}).get(row['gene_id'], [])), axis=1
+        )
 
     # update col order 
     column_order = ['read_id', 'gene_id', 'read_length', 'alignment_length', 'splice_count', 

@@ -15,7 +15,7 @@ time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j > ${out_dir}/ROGU
 
 
 # run R1 with index 
-time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --index /g/data/lf10/as7425/2023_mrna-biogenesis-maps/analysis/204-06-17_ROGUE1-splicing-order/annotation_with_clusters > ${out_dir}/ROGUE1-log.txt 2>&1
+time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --index /g/data/lf10/as7425/2023_mrna-biogenesis-maps/analysis/204-06-17_ROGUE1-splicing-order/annotation_with_clusters --record_exons > ${out_dir}/ROGUE1-log.txt 2>&1
 
 
 
