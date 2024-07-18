@@ -24,6 +24,14 @@ def gtf_to_bed(gtf_file, feature_type, output_dir):
     elif feature_type == "transcript":
         cmd = f"cat {gtf_file} | awk 'OFS=\"\\t\" {{if ($3==\"transcript\") {{print $1,$4-1,$5,$10,$18,$7}}}}' | tr -d '\";' | awk 'OFS=\"\\t\" {{if ($6==\"+\") {{print $1,$3,$3,$4,$5,$6}} else {{print $1,$2,$2,$4,$5,$6}}}}' | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G > {bed_file}"
 
+    elif feature_type == "intron":
+        gene_bed = gtf_to_bed(gtf_file, "gene", output_dir)
+        exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
+        cmd = f"""
+        bedtools subtract -s -a <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {gene_bed} | sort -k1,1 -k2,2n) \
+        -b <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {exon_bed} | sort -k1,1 -k2,2n) | \
+        awk 'BEGIN{{FS=OFS="\\t"}} {{split($1, a, ";"); $1=a[1]; print}}' > {bed_file}
+        """
     else:
             raise ValueError(f"Unknown feature type: {feature_type}. Valid options are 'gene', 'exon', and 'transcript'.")
 
@@ -56,7 +64,6 @@ def extend_gene_bed(gene_bed_file, output_dir, genome_file, extend_bases=500):
     print(df.head())  # Check the first few entries to see how they are modified
     print(genome)  # Print the genome dictionary to ensure correct chromosome lengths
 
-    # Sort the DataFrame by the first and second column
     df.sort_values([0, 1], inplace=True)
 
     df.to_csv(extended_bed, sep="\t", header=False, index=False)
