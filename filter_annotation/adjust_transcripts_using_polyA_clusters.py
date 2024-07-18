@@ -49,7 +49,10 @@ def find_downstream_positions(clusters_df, gene_df):
     return downstream_positions
 
 def number_exons_and_introns(exons, introns, gene_id, strand):
-    regions = pd.concat([exons, introns])
+    if exons.empty and introns.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    regions = pd.concat([exons, introns]).reset_index(drop=True)
     regions['region_type'] = ['exon'] * len(exons) + ['intron'] * len(introns)
     
     if strand == '+':
@@ -59,13 +62,17 @@ def number_exons_and_introns(exons, introns, gene_id, strand):
     
     exon_count = 1
     intron_count = 1
-    for idx, row in regions.iterrows():
+    numbers = []
+    for _, row in regions.iterrows():
         if row['region_type'] == 'exon':
-            regions.at[idx, 'name'] = f"{gene_id}_exon_{exon_count}"
+            numbers.append(f"exon_{exon_count}")
             exon_count += 1
         else:
-            regions.at[idx, 'name'] = f"{gene_id}_intron_{intron_count}"
+            numbers.append(f"intron_{intron_count}")
             intron_count += 1
+    
+    regions['number'] = numbers
+    regions['combined'] = gene_id + '_' + regions['number']
     
     numbered_exons = regions[regions['region_type'] == 'exon'].drop('region_type', axis=1)
     numbered_introns = regions[regions['region_type'] == 'intron'].drop('region_type', axis=1)
@@ -252,9 +259,10 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     final_exons.to_csv(os.path.join(args.output_dir, 'updated_exon.bed'), sep='\t', header=False, index=False, 
-                       columns=['chrom', 'start', 'end', 'name', 'score', 'strand'])
+                       columns=['chrom', 'start', 'end', 'gene_id', 'combined', 'strand'])
     final_introns.to_csv(os.path.join(args.output_dir, 'updated_intron.bed'), sep='\t', header=False, index=False, 
-                         columns=['chrom', 'start', 'end', 'name', 'score', 'strand'])
+                         columns=['chrom', 'start', 'end', 'gene_id', 'combined', 'strand'])
+
     final_dogs.to_csv(os.path.join(args.output_dir, 'updated_downstream_of_gene.bed'), sep='\t', header=False, index=False)
     final_genes.to_csv(os.path.join(args.output_dir, 'updated_gene.bed'), sep='\t', header=False, index=False)
     final_clusters.to_csv(os.path.join(args.output_dir, 'PAS.bed'), sep='\t', header=False, index=False)
