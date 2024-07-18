@@ -4,11 +4,12 @@ import argparse
 import logging 
 import pandas as pd
 import multiprocessing
+import tempfile
 
 # function imports 
 sys.path.append("/home/150/as7425/R1/read_classifier/")
 from process_genome import generate_genome_file, read_chromosomes_from_genome_file, filter_bed_by_chromosome_inplace
-from gtf_to_bed import gtf_to_bed, extend_gene_bed 
+from gtf_to_bed import gtf_to_bed, extend_gene_bed, sort_bed_file
 from intersect import run_bedtools
 from parse_intersect import parse_output
 from process_read_end_positions import calculate_distance_to_read_ends, get_transcript_ends
@@ -26,7 +27,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # get cpu count
 cpu_count = multiprocessing.cpu_count()
 
-def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA, junction_distance):
+def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA, junction_distance, index_path):
 
     output_dir = os.path.dirname(output_table) 
 
@@ -50,63 +51,91 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     # create a bed file of downstream of gene regions 
     dog_bed_file = extend_gene_bed(gene_bed_file, output_dir, genome_file) 
 
-    # intersect reads against, exons, genes, and downstream of gene regions 
-    intersect_files = run_bedtools(bam_file, gtf_file, dog_bed_file, genome_file, output_dir) 
+    # if index_path is provided, read BED files from the index
+    if index_path:
+        pas_bed = os.path.join(index_path, "PAS.bed")
+        dog_bed = os.path.join(index_path, "updated_downstream_of_gene.bed")
+        exon_bed = os.path.join(index_path, "updated_exon.bed")
+        intron_bed = os.path.join(index_path, "updated_intron.bed")
+        gene_bed = os.path.join(index_path, "updated_gene.bed")
+        
+        # Check if all required files exist
+        required_files = [pas_bed, dog_bed, exon_bed, intron_bed, gene_bed]
+        if all(os.path.exists(f) for f in required_files):
+            logging.info(f"Using index files from {index_path}")
+            
+            # Create temporary directory for sorted files
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Sort all index files
+                sorted_pas_bed = sort_bed_file(pas_bed, os.path.join(temp_dir, "sorted_PAS.bed"))
+                sorted_dog_bed = sort_bed_file(dog_bed, os.path.join(temp_dir, "sorted_updated_downstream_of_gene.bed"))
+                sorted_exon_bed = sort_bed_file(exon_bed, os.path.join(temp_dir, "sorted_updated_exon.bed"))
+                sorted_intron_bed = sort_bed_file(intron_bed, os.path.join(temp_dir, "sorted_updated_intron.bed"))
+                sorted_gene_bed = sort_bed_file(gene_bed, os.path.join(temp_dir, "sorted_updated_gene.bed"))
+                
+                # Update the paths to use the sorted files
+                pas_bed, dog_bed, exon_bed, intron_bed, gene_bed = sorted_pas_bed, sorted_dog_bed, sorted_exon_bed, sorted_intron_bed, sorted_gene_bed
+                
 
-    # parse the bedtools intersect files 
-    df = parse_output(intersect_files[0], intersect_files[1], intersect_files[2], intersect_files[3], intersect_files[4])
-    
-    # store a dict of read_id and gene_id 
-    gene_id_map = df.set_index('read_id')['gene_id'].to_dict()
+                # intersect reads against, exons, genes, and downstream of gene regions 
+                intersect_files = run_bedtools(bam_file, gtf_file, genome_file, output_dir, 
+                                            pas_bed=pas_bed, dog_bed=dog_bed, exon_bed=exon_bed, 
+                                            intron_bed=intron_bed, gene_bed=gene_bed)
 
-    # extract and merge the modifications if mods are calculated 
-    if calculate_modifications:
-        modifications_dict = {}
-        for modification in extract_modifications(bam_file):
-            if modification is not None:
-                read_id, reference, strand, mods = modification.split('\t')
-                modifications_dict[read_id] = mods
-            else:
-                modifications_dict[read_id] = "No modifications or missing tags"
-        modifications_df = pd.DataFrame(list(modifications_dict.items()), columns=['read_id', 'Modifications'])
-        print(modifications_df.head())
-        df = pd.merge(df, modifications_df, on='read_id', how='left')
+                # parse the bedtools intersect files 
+                df = parse_output(intersect_files[0], intersect_files[1], intersect_files[2], intersect_files[3], intersect_files[4])
+                
+                # store a dict of read_id and gene_id 
+                gene_id_map = df.set_index('read_id')['gene_id'].to_dict()
 
-    # merge the polyA tail length calls if requested 
-    if calculate_polyA:
-        polyA_lengths = fetch_polyA_pt(bam_file)
-        polyA_df = pd.DataFrame(list(polyA_lengths.items()), columns=['read_id', 'polya_length'])
-        df = pd.merge(df, polyA_df, on='read_id', how='left')
+                # extract and merge the modifications if mods are calculated 
+                if calculate_modifications:
+                    modifications_dict = {}
+                    for modification in extract_modifications(bam_file):
+                        if modification is not None:
+                            read_id, reference, strand, mods = modification.split('\t')
+                            modifications_dict[read_id] = mods
+                        else:
+                            modifications_dict[read_id] = "No modifications or missing tags"
+                    modifications_df = pd.DataFrame(list(modifications_dict.items()), columns=['read_id', 'Modifications'])
+                    print(modifications_df.head())
+                    df = pd.merge(df, modifications_df, on='read_id', how='left')
 
-    # calculate distance to junctions if requested 
-    if junction_distance: 
+                # merge the polyA tail length calls if requested 
+                if calculate_polyA:
+                    polyA_lengths = fetch_polyA_pt(bam_file)
+                    polyA_df = pd.DataFrame(list(polyA_lengths.items()), columns=['read_id', 'polya_length'])
+                    df = pd.merge(df, polyA_df, on='read_id', how='left')
 
-        # extract all junctions 
-        all_junctions = parallel_extract_splice_junctions(bam_file, num_cpus = cpu_count, gene_id_map=gene_id_map)
-        all_junctions.to_csv(output_dir + "/all_junctions.bed", sep="\t", index=False)
+                # calculate distance to junctions if requested 
+                if junction_distance: 
 
-        # collapse to unique junctions with support level of at least 2 alignments 
-        collapsed_junctions = summarize_junctions(all_junctions, 2)
+                    # extract all junctions 
+                    all_junctions = parallel_extract_splice_junctions(bam_file, num_cpus = cpu_count, gene_id_map=gene_id_map)
+                    all_junctions.to_csv(output_dir + "/all_junctions.bed", sep="\t", index=False)
 
-        # save junctions to bed file for future inspection 
-        collapsed_junctions.to_csv(output_dir + "/collapsed_junctions.bed", sep="\t", index=False)
+                    # collapse to unique junctions with support level of at least 2 alignments 
+                    collapsed_junctions = summarize_junctions(all_junctions, 2)
 
-        # filter junctions
-        final_junctions = filter_junctions(collapsed_junctions)
+                    # save junctions to bed file for future inspection 
+                    collapsed_junctions.to_csv(output_dir + "/collapsed_junctions.bed", sep="\t", index=False)
 
-        # save junctions 
-        with open(output_dir + "/final_junctions.bed", 'w') as file:
-            file.write("track name=junctions\n")
-            final_junctions.to_csv(file, sep='\t', index=False, header=False)
+                    # filter junctions
+                    final_junctions = filter_junctions(collapsed_junctions)
 
-        # convert junctions to donor final nucelotides 
-        splice_donors = final_junctions.assign(
-            Start=lambda df: df.apply(lambda x: x['Start'] - 1 if x['Strand'] == '+' else x['End'], axis=1),
-            End=lambda df: df.apply(lambda x: x['Start'] if x['Strand'] == '+' else x['End'] + 1, axis=1)
-        ).rename(columns={'Chromosome': 'chromosome', 'Start': 'position', 'Strand': 'strand'})
+                    # save junctions 
+                    with open(output_dir + "/final_junctions.bed", 'w') as file:
+                        file.write("track name=junctions\n")
+                        final_junctions.to_csv(file, sep='\t', index=False, header=False)
 
-        # calculate distances to nearest splice donors 
-        df = calculate_distance_to_read_ends(df, splice_donors, "splice_donors")
+                    # convert junctions to donor final nucelotides 
+                    splice_donors = final_junctions.assign(
+                        Start=lambda df: df.apply(lambda x: x['Start'] - 1 if x['Strand'] == '+' else x['End'], axis=1),
+                        End=lambda df: df.apply(lambda x: x['Start'] if x['Strand'] == '+' else x['End'] + 1, axis=1)
+                    ).rename(columns={'Chromosome': 'chromosome', 'Start': 'position', 'Strand': 'strand'})
+
+                    # calculate distances to nearest splice donors 
+                    df = calculate_distance_to_read_ends(df, splice_donors, "splice_donors")
 
     # fetch the gene biotypes 
     biotypes = get_biotypes(gtf_file)
@@ -152,6 +181,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--modifications', action='store_true', help='Calculate modifications data if this flag is present.')
     parser.add_argument('-p', '--polyA', action='store_true', help='Calculate polyA tail lengths if this flag is present.')
     parser.add_argument('-j', '--junction_distance', action='store_true', help='Calculate distance between read 3 prime end and splice donors.')
+    parser.add_argument('--index', type=str, help='Path to the index directory containing pre-computed BED files')
 
     args = parser.parse_args()
 
@@ -160,5 +190,5 @@ if __name__ == "__main__":
     output_table = args.output_table
     
     
-    main(args.bam_file, args.gtf_file, args.output_table, args.modifications, args.polyA, args.junction_distance)
+    main(args.bam_file, args.gtf_file, args.output_table, args.modifications, args.polyA, args.junction_distance, args.index)
 

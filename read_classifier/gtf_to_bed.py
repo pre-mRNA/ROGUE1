@@ -62,3 +62,8 @@ def extend_gene_bed(gene_bed_file, output_dir, genome_file, extend_bases=500):
     df.to_csv(extended_bed, sep="\t", header=False, index=False)
 
     return extended_bed
+
+def sort_bed_file(input_file, output_file):
+    cmd = f"sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G {input_file} > {output_file}"
+    subprocess.run(cmd, shell=True, check=True)
+    return output_file
