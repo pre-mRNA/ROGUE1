@@ -1,5 +1,5 @@
 # ROGUE1
-Single-molecule integration, classification and quantificaiton of splicing, transcription, and RNA modification data from long-read sequencing 
+Single-molecule integration, classification and quantification of splicing, transcription, and RNA modification data from long-read sequencing 
 
 # File Structure
 TODO: update file structure 
