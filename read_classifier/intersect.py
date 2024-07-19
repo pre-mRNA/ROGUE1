@@ -7,48 +7,19 @@ from bam_to_bed import bam_to_bed
 from parallel_bed_operations import split_bed_file, write_sorted_chunk
 from gtf_to_bed import gtf_to_bed, extend_gene_bed
 from process_genome import read_chromosomes_from_genome_file, filter_bed_by_chromosome_inplace
-from process_genome import read_chromosomes_from_genome_file
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 # intersect the bam file against, exons, genes, and dog regions
-def run_bedtools(bam_file, gtf_file, genome_file, output_dir, num_files=104, pas_bed=None, dog_bed=None, exon_bed=None, intron_bed=None, gene_bed=None):
-    
-    # convert bam to bed and calculate the 3' end coordinates 
+def run_bedtools(bam_file, genome_file, output_dir, dog_bed_file, exon_bed_file, intron_bed_file, gene_bed_file, num_files=104):
+ 
+    # Convert bam to bed and calculate the 3' end coordinates 
     bed_file, end_coordinates = bam_to_bed(bam_file, output_dir, num_files)
 
     # split bed file into chunks
     temp_bed_files = split_bed_file(bed_file, output_dir, num_files)
 
-    # use index files if provided, otherwise generate from GTF
-    if not exon_bed:
-        exon_bed_file = gtf_to_bed(gtf_file, "exon", output_dir)
-    else:
-        exon_bed_file = exon_bed
-
-    if not gene_bed:
-        gene_bed_file = gtf_to_bed(gtf_file, "gene", output_dir)
-    else:
-        gene_bed_file = gene_bed
-
-    if not intron_bed:
-        intron_bed_file = gtf_to_bed(gtf_file, "intron", output_dir)
-    else:
-        intron_bed_file = intron_bed
-
-    if not dog_bed:
-        dog_bed_file = extend_gene_bed(gene_bed_file, output_dir, genome_file)
-    else:
-        dog_bed_file = dog_bed
-
-    chromosomes = read_chromosomes_from_genome_file(genome_file)
-
-    filter_bed_by_chromosome_inplace(exon_bed_file, chromosomes)
-    filter_bed_by_chromosome_inplace(gene_bed_file, chromosomes)
-    filter_bed_by_chromosome_inplace(intron_bed_file, chromosomes)
-
     logging.info("Calculating alignment overlap with exons, introns, genes and DOG regions")
-
 
     with ThreadPoolExecutor(max_workers=num_files) as executor:
         tasks = []

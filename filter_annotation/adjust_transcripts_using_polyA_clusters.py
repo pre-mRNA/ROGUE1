@@ -96,7 +96,7 @@ def create_initial_dog(gene_entry, pas_position, dog_length=2500):
         'start': [dog_start],
         'end': [dog_end],
         'gene_id': [gene_entry['gene_id']],
-        'score': [gene_entry['gene_id'] + "_DOG"],
+        'score': [gene_entry['gene_id'] + "_region_DOG"],
         'strand': [gene_entry['strand']]
     })
 

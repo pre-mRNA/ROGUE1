@@ -3,8 +3,11 @@ import warnings
 import pandas as pd 
 import numpy as np 
 from collections import defaultdict
+import subprocess
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_overlap_file, bed_file, end_coordinates, record_exons):
+def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_overlap_file, bed_file, end_coordinates, record_exons, genome_file, output_dir, num_files, original_exon_bed, original_intron_bed, original_dog_bed):
     for file in [exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_overlap_file]:
         if not os.path.isfile(file):
             raise Exception(f"Essential file {file} does not exist. Unable to proceed.")
@@ -72,7 +75,7 @@ def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_
     gene_overlap_sum['exon_base_overlap'].fillna(0, inplace=True)
     gene_overlap_sum['intron_base_overlap'].fillna(0, inplace=True)
 
-    # Rename the column for gene - exon overlap
+    # eename the column for gene - exon overlap
     gene_overlap_sum['gene_exon_bases'] = gene_overlap_sum['gene_base_overlap'] - gene_overlap_sum['exon_base_overlap']
 
     # handle DOGs
@@ -134,6 +137,122 @@ def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_
     gene_overlap_sum.drop(columns=['end_coordinates'], inplace=True)
     gene_overlap_sum['strand_sign'] = gene_overlap_sum['read_end_strand'].map({'+': 1, '-': -1})
 
+    # create gene chunks for 3' feature intersection 
+    def create_gene_chunks(df, num_files):
+        
+        gene_groups = df.groupby('gene_id')
+        total_reads = len(df)
+        target_chunk_size = total_reads // num_files
+        
+        chunks = defaultdict(list)
+        current_chunk = 0
+        current_chunk_size = 0
+        
+        for gene_id, group in gene_groups:
+            gene_size = len(group)
+            
+            if current_chunk_size + gene_size > target_chunk_size and current_chunk < num_files - 1:
+                current_chunk += 1
+                current_chunk_size = 0
+            
+            chunks[current_chunk].append(gene_id)
+            current_chunk_size += gene_size
+        
+        return chunks
+
+    def create_and_sort_3prime_bed(df, output_dir, gene_chunks):
+        temp_bed_files = []
+        
+        def process_chunk(chunk_genes, i):
+            chunk = df[df['gene_id'].isin(chunk_genes)].sort_values(by=['gene_id', 'read_end_chromosome', 'read_end_position'])
+            temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=f'_3prime_{i}.sorted.bed', dir=output_dir)
+            for _, row in chunk.iterrows():
+                temp_file.write(f"{row['gene_id']}_{row['read_end_chromosome']}\t{row['read_end_position']-1}\t{row['read_end_position']}\t{row['read_id']}\t.\t{row['read_end_strand']}\n")
+            temp_file.close()
+            return temp_file.name
+
+        with ThreadPoolExecutor() as executor:
+            futures = []
+            for i, chunk_genes in gene_chunks.items():
+                futures.append(executor.submit(process_chunk, chunk_genes, i))
+            
+            temp_bed_files = [future.result() for future in futures]
+        
+        return temp_bed_files
+
+    def create_and_sort_feature_bed(original_exon_bed, original_intron_bed, original_dog_bed, output_dir, gene_chunks):
+        temp_bed_files = []
+        
+        def process_chunk(chunk_genes, i):
+            temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=f'_features_{i}.bed', dir=output_dir)
+            for bed_file, feature_type in [(original_exon_bed, 'exon'), (original_intron_bed, 'intron'), (original_dog_bed, 'DOG')]:
+                with open(bed_file, 'r') as f:
+                    for line in f:
+                        fields = line.strip().split('\t')
+                        gene_id = fields[3]
+                        if gene_id in chunk_genes:
+                            chrom, start, end, feature_id, score, strand = fields
+                            temp_file.write(f"{gene_id}_{chrom}\t{start}\t{end}\t{feature_type}_{feature_id}\t{score}\t{strand}\n")
+            temp_file.close()
+            
+            sorted_file = f"{temp_file.name}.sorted"
+            subprocess.run(f"sort -k1,1 -k2,2n {temp_file.name} > {sorted_file}", shell=True, check=True)
+            os.unlink(temp_file.name)  # remove unsorted file 
+            return sorted_file
+
+        with ThreadPoolExecutor() as executor:
+            futures = []
+            for i, chunk_genes in gene_chunks.items():
+                futures.append(executor.submit(process_chunk, chunk_genes, i))
+            
+            temp_bed_files = [future.result() for future in futures]
+        
+        return temp_bed_files
+
+    # create gene chunks 
+    gene_chunks = create_gene_chunks(gene_overlap_sum, num_files)
+
+    # create and sort BED files
+    three_prime_bed_files = create_and_sort_3prime_bed(gene_overlap_sum, output_dir, gene_chunks)
+    feature_bed_files = create_and_sort_feature_bed(original_exon_bed, original_intron_bed, original_dog_bed, output_dir, gene_chunks)
+
+    # intersect read 3' coordinates to features from their assigned genes 
+    with ThreadPoolExecutor(max_workers=num_files) as executor:
+        tasks = []
+        for i in range(len(gene_chunks)):
+            intersect_output = f"{output_dir}/three_prime_feature_intersect_{i}.bed"
+            intersect_cmd = f"bedtools intersect -a {three_prime_bed_files[i]} -b {feature_bed_files[i]} -sorted -wo > {intersect_output}"
+            tasks.append(executor.submit(subprocess.run, intersect_cmd, shell=True, check=True))
+
+        for task in as_completed(tasks):
+            task.result()
+
+    # process results 
+    feature_map = {}
+    error_cases = []
+
+    for i in range(len(gene_chunks)):
+        intersect_output = f"{output_dir}/three_prime_feature_intersect_{i}.bed"
+        with open(intersect_output, 'r') as f:
+            for line in f:
+                fields = line.strip().split('\t')
+                read_id = fields[3]
+                feature_type = fields[9].split('_')[0]
+                if read_id in feature_map:
+                    error_cases.append((read_id, fields[0].split('_')[0]))
+                else:
+                    parts = fields[9].split('_')
+                    feature_map[read_id] = '_'.join(fields[10].split('_')[1:])
+
+    # add feature information 
+    gene_overlap_sum['three_prime_feature'] = gene_overlap_sum['read_id'].map(lambda x: feature_map.get(x, "unclassified"))
+
+    # log error cases for 3' coordinate features 
+    with open(f"{output_dir}/three_prime_feature_errors.log", "w") as f:
+        f.write(f"Number of reads with multiple 3' end features: {len(error_cases)}\n")
+        for read_id, gene_id in error_cases:
+            f.write(f"Read ID: {read_id}, Gene ID: {gene_id}\n")
+
     # if record_exons, record exon and intron IDs with overlaps in the target gene
     # NOTE: we could consider adding a threshold to introns, since noisy reads 
     # can leak into the intron and cause spurious classification of intron spanning reads 
@@ -167,7 +286,7 @@ def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_
     column_order = ['read_id', 'gene_id', 'read_length', 'alignment_length', 'splice_count', 
                     'gene_base_overlap', 'exon_base_overlap', 'intron_base_overlap', 'gene_exon_bases', 'DOG_overlap', 
                     'unclassified_length', 'unaligned_length', 'read_end_chromosome', 
-                    'read_end_position', 'read_end_strand', 'strand_sign']
+                    'read_end_position', 'read_end_strand', 'strand_sign', 'three_prime_feature']
     if record_exons:
         column_order.extend(['exon_ids', 'intron_ids'])
 

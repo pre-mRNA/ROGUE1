@@ -37,61 +37,65 @@ def cleanup_temp_dir():
 
 atexit.register(cleanup_temp_dir)
 
-def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA, junction_distance, index_path, record_exons):
+# load a pre-made genome index 
+def load_index_files(index_path, temp_dir):
+    pas_bed = os.path.join(index_path, "PAS.bed")
+    dog_bed = os.path.join(index_path, "updated_downstream_of_gene.bed")
+    exon_bed = os.path.join(index_path, "updated_exon.bed")
+    intron_bed = os.path.join(index_path, "updated_intron.bed")
+    gene_bed = os.path.join(index_path, "updated_gene.bed")
 
+    required_files = [pas_bed, dog_bed, exon_bed, intron_bed, gene_bed]
+    if all(os.path.exists(f) for f in required_files):
+        logging.info(f"Using index files from {index_path}")
+        sorted_pas_bed = sort_bed_file(pas_bed, os.path.join(temp_dir, "sorted_PAS.bed"))
+        sorted_dog_bed = sort_bed_file(dog_bed, os.path.join(temp_dir, "sorted_updated_downstream_of_gene.bed"))
+        sorted_exon_bed = sort_bed_file(exon_bed, os.path.join(temp_dir, "sorted_updated_exon.bed"))
+        sorted_intron_bed = sort_bed_file(intron_bed, os.path.join(temp_dir, "sorted_updated_intron.bed"))
+        sorted_gene_bed = sort_bed_file(gene_bed, os.path.join(temp_dir, "sorted_updated_gene.bed"))
+        return sorted_pas_bed, sorted_dog_bed, sorted_exon_bed, sorted_intron_bed, sorted_gene_bed
+    else:
+        return None, None, None, None, None
+
+def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA, junction_distance, index_path, record_exons):
     output_dir = os.path.dirname(output_table) 
 
-    # check if the output directory exists and is writeable and print to log
     if not os.path.exists(output_dir):
         logging.info(f"Output directory {output_dir} does not exist. Creating it now.")
         os.makedirs(output_dir)
     else:
         logging.info(f"Output directory for ROGUE1 table is {output_dir}.")
 
-    # generate a genome file for bedtools sort 
-    genome_file = generate_genome_file(bam_file, output_dir) 
-
-    # create a bed file of gene regions
-    gene_bed_file = gtf_to_bed(gtf_file, "gene", output_dir) 
-
-    # filter for relevant chromsoomes
-    chromosomes = read_chromosomes_from_genome_file(genome_file)
-    filter_bed_by_chromosome_inplace(gene_bed_file, chromosomes)
-
-    # create a bed file of downstream of gene regions 
-    dog_bed_file = extend_gene_bed(gene_bed_file, output_dir, genome_file) 
+    genome_file = generate_genome_file(bam_file, output_dir)
 
     pas_bed, dog_bed, exon_bed, intron_bed, gene_bed = None, None, None, None, None
 
+    # import annotations from index, if provided 
     if index_path:
-        pas_bed = os.path.join(index_path, "PAS.bed")
-        dog_bed = os.path.join(index_path, "updated_downstream_of_gene.bed")
-        exon_bed = os.path.join(index_path, "updated_exon.bed")
-        intron_bed = os.path.join(index_path, "updated_intron.bed")
-        gene_bed = os.path.join(index_path, "updated_gene.bed")
-        
-        required_files = [pas_bed, dog_bed, exon_bed, intron_bed, gene_bed]
-        if all(os.path.exists(f) for f in required_files):
-            logging.info(f"Using index files from {index_path}")
-            
-            sorted_pas_bed = sort_bed_file(pas_bed, os.path.join(temp_dir, "sorted_PAS.bed"))
-            sorted_dog_bed = sort_bed_file(dog_bed, os.path.join(temp_dir, "sorted_updated_downstream_of_gene.bed"))
-            sorted_exon_bed = sort_bed_file(exon_bed, os.path.join(temp_dir, "sorted_updated_exon.bed"))
-            sorted_intron_bed = sort_bed_file(intron_bed, os.path.join(temp_dir, "sorted_updated_intron.bed"))
-            sorted_gene_bed = sort_bed_file(gene_bed, os.path.join(temp_dir, "sorted_updated_gene.bed"))
-            
-            pas_bed, dog_bed, exon_bed, intron_bed, gene_bed = sorted_pas_bed, sorted_dog_bed, sorted_exon_bed, sorted_intron_bed, sorted_gene_bed
-        else:
-            logging.warning(f"Some required files are missing in the index path. Proceeding without index files.")
+        pas_bed, dog_bed, exon_bed, intron_bed, gene_bed = load_index_files(index_path, temp_dir)
+        if not all([pas_bed, dog_bed, exon_bed, intron_bed, gene_bed]):
+            logging.warning("Some required files are missing in the index path. Creating new index files.")
             index_path = None
 
-    # intersect reads against, exons, genes, and downstream of gene regions 
-    intersect_files = run_bedtools(bam_file, gtf_file, genome_file, output_dir, 
-                                pas_bed=pas_bed, dog_bed=dog_bed, exon_bed=exon_bed, 
-                                intron_bed=intron_bed, gene_bed=gene_bed)
+    if not index_path:
+        gene_bed = gtf_to_bed(gtf_file, "gene", output_dir)
+        exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
+        intron_bed = gtf_to_bed(gtf_file, "intron", output_dir)
+        dog_bed = extend_gene_bed(gene_bed, output_dir, genome_file)
 
-    # parse the bedtools intersect files 
-    df = parse_output(intersect_files[0], intersect_files[1], intersect_files[2], intersect_files[3], intersect_files[4], intersect_files[5], record_exons)
+        # filter annotations for relevant chromosomes 
+        chromosomes = read_chromosomes_from_genome_file(genome_file)
+        for bed_file in [gene_bed, exon_bed, intron_bed, dog_bed]:
+            filter_bed_by_chromosome_inplace(bed_file, chromosomes)
+
+    # intersect aligned regions against annotations 
+    intersect_files = run_bedtools(bam_file, genome_file, output_dir, dog_bed, exon_bed, intron_bed, gene_bed, num_files=104)
+
+    # parse intersection output 
+    df = parse_output(intersect_files[0], intersect_files[1], intersect_files[2], intersect_files[3], 
+                      intersect_files[4], intersect_files[5], record_exons, genome_file, output_dir, 
+                      num_files=104, original_exon_bed=exon_bed, original_intron_bed=intron_bed, 
+                      original_dog_bed=dog_bed)
     
     # store a dict of read_id and gene_id 
     gene_id_map = df.set_index('read_id')['gene_id'].to_dict()
