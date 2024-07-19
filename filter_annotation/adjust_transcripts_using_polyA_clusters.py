@@ -24,6 +24,10 @@ def read_clusters(file_path):
     clusters_df['category'] = clusters_df['category'].astype('category')
     return clusters_df
 
+def read_fasta_index(fai_path):
+    fai_df = pd.read_csv(fai_path, sep='\t', header=None, names=['chrom', 'length', 'offset', 'linebases', 'linewidth'])
+    return fai_df.set_index('chrom')['length'].to_dict()
+
 def find_downstream_positions(clusters_df, gene_df):
     post_trans_clusters = clusters_df[clusters_df['category'] == 'post_transcriptional']
     gene_info = gene_df.set_index('gene_id')[['chrom', 'start', 'end', 'strand']]
@@ -79,70 +83,118 @@ def number_exons_and_introns(exons, introns, gene_id, strand):
     
     return numbered_exons, numbered_introns
 
-def adjust_regions_for_gene(gene_id, exon_df, intron_df, dog_df, gene_df, cluster, window=5):
+def create_initial_dog(gene_entry, pas_position, dog_length=2500):
+    if gene_entry['strand'] == '+':
+        dog_start = pas_position
+        dog_end = pas_position + dog_length
+    else:
+        dog_start = pas_position - dog_length
+        dog_end = pas_position
+    
+    return pd.DataFrame({
+        'chrom': [gene_entry['chrom']],
+        'start': [dog_start],
+        'end': [dog_end],
+        'gene_id': [gene_entry['gene_id']],
+        'score': [gene_entry['gene_id'] + "_DOG"],
+        'strand': [gene_entry['strand']]
+    })
+
+def subtract_regions(dog, regions):
+    if dog.empty or regions.empty:
+        return dog
+
+    dog_intervals = pd.IntervalIndex.from_arrays(dog['start'], dog['end'], closed='both')
+    region_intervals = pd.IntervalIndex.from_arrays(regions['start'], regions['end'], closed='both')
+
+    remaining_intervals = dog_intervals.difference(region_intervals)
+    
+    if len(remaining_intervals) == 0:
+        return pd.DataFrame(columns=dog.columns)
+    
+    new_dog = pd.DataFrame({
+        'chrom': dog['chrom'].iloc[0],
+        'start': [interval.left for interval in remaining_intervals],
+        'end': [interval.right for interval in remaining_intervals],
+        'gene_id': dog['gene_id'].iloc[0],
+        'score': dog['score'].iloc[0],
+        'strand': dog['strand'].iloc[0]
+    })
+    
+    return new_dog
+
+def trim_split_dog(dog):
+    if len(dog) <= 1:
+        return dog
+    return dog.iloc[[0]]  # if dog is split, e.g by another exon, keep only the most upstream dog region 
+
+def adjust_for_genome_boundaries(dog, chrom_lengths):
+    if dog.empty:
+        return dog
+    
+    chrom_length = chrom_lengths.get(dog['chrom'].iloc[0], float('inf'))
+    dog['start'] = dog['start'].clip(lower=0)
+    dog['end'] = dog['end'].clip(upper=chrom_length)
+    
+    return dog[dog['start'] < dog['end']]  
+
+def adjust_regions_for_gene(gene_id, exon_df, intron_df, gene_df, cluster, chrom_lengths):
     gene_exons = exon_df[exon_df['gene_id'] == gene_id].sort_values('start')
     gene_introns = intron_df[intron_df['gene_id'] == gene_id].sort_values('start')
-    gene_dog = dog_df[dog_df['gene_id'] == gene_id]
     gene_entry = gene_df[gene_df['gene_id'] == gene_id].iloc[0]
     
     if cluster is None:
         exons_to_keep = gene_exons
         introns_to_keep = gene_introns
-        new_dog = gene_dog
+        new_dog = pd.DataFrame()
         new_gene_entry = gene_entry
-        error_message = None
+        error_message = "No cluster provided"
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame([gene_entry]), pd.DataFrame(), error_message
+
+    pas_position = cluster['end'] if cluster['strand'] == '+' else cluster['start']
+    
+    if (cluster['strand'] == '+' and pas_position < gene_entry['start']) or \
+       (cluster['strand'] == '-' and pas_position > gene_entry['end']):
+        error_message = f"PAS position {pas_position} is {'before' if cluster['strand'] == '+' else 'after'} gene {'start' if cluster['strand'] == '+' else 'end'} {gene_entry['start' if cluster['strand'] == '+' else 'end']} for gene {gene_id}"
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame([gene_entry]), pd.DataFrame([cluster]), error_message
+
+    # adjust exons and introns based on PAS position
+    affected_exons = gene_exons[(gene_exons['start'] <= pas_position) & (gene_exons['end'] >= pas_position)]
+    affected_exons_indices = affected_exons.index
+    if cluster['strand'] == '+':
+        gene_exons.loc[affected_exons_indices, 'end'] = pas_position
+        exons_to_keep = gene_exons[gene_exons['end'] <= pas_position]
+        introns_to_keep = gene_introns[gene_introns['end'] < pas_position]
     else:
-        pas_position = cluster['end'] if cluster['strand'] == '+' else cluster['start']
-        
-        # check for upstream clusters
-        if (cluster['strand'] == '+' and pas_position < gene_entry['start']) or \
-           (cluster['strand'] == '-' and pas_position > gene_entry['end']):
-            exons_to_keep = gene_exons
-            introns_to_keep = gene_introns
-            new_dog = gene_dog
-            new_gene_entry = gene_entry
-            error_message = f"PAS position {pas_position} is {'before' if cluster['strand'] == '+' else 'after'} gene {'start' if cluster['strand'] == '+' else 'end'} {gene_entry['start' if cluster['strand'] == '+' else 'end']} for gene {gene_id}"
-        else:
-            if cluster['strand'] == '+':
-                exons_to_keep = gene_exons[gene_exons['end'] <= pas_position]
-                introns_to_keep = gene_introns[gene_introns['end'] < pas_position]
-                if not exons_to_keep.empty:
-                    last_exon = exons_to_keep.iloc[-1].copy()
-                    last_exon['end'] = pas_position
-                    exons_to_keep = pd.concat([exons_to_keep[:-1], pd.DataFrame([last_exon])])
-                new_dog_start = pas_position + window
-                new_dog_end = new_dog_start + (gene_dog['end'].iloc[0] - gene_dog['start'].iloc[0]) if not gene_dog.empty else new_dog_start + window
-                new_gene_entry = gene_entry.copy()
-                new_gene_entry['end'] = pas_position
-            else:  
-                exons_to_keep = gene_exons[gene_exons['start'] >= pas_position]
-                introns_to_keep = gene_introns[gene_introns['start'] > pas_position]
-                if not exons_to_keep.empty:
-                    first_exon = exons_to_keep.iloc[0].copy()
-                    first_exon['start'] = pas_position
-                    exons_to_keep = pd.concat([pd.DataFrame([first_exon]), exons_to_keep[1:]])
-                new_dog_end = pas_position - window
-                new_dog_start = new_dog_end - (gene_dog['end'].iloc[0] - gene_dog['start'].iloc[0]) if not gene_dog.empty else new_dog_end - window
-                new_gene_entry = gene_entry.copy()
-                new_gene_entry['start'] = pas_position
-            
-            new_dog = pd.DataFrame({
-                'chrom': cluster['chrom'],
-                'start': new_dog_start,
-                'end': new_dog_end,
-                'gene_id': gene_id,
-                'score': gene_dog['score'].iloc[0] if not gene_dog.empty else '.',
-                'strand': cluster['strand']
-            }, index=[0])
-            error_message = None
+        gene_exons.loc[affected_exons_indices, 'start'] = pas_position
+        exons_to_keep = gene_exons[gene_exons['start'] >= pas_position]
+        introns_to_keep = gene_introns[gene_introns['start'] > pas_position]
 
-    # number the exons and introns
-    numbered_exons, numbered_introns = number_exons_and_introns(exons_to_keep, introns_to_keep, gene_id, gene_entry['strand'])
+    new_gene_entry = gene_entry.copy()
+    new_gene_entry['end'] = pas_position if cluster['strand'] == '+' else gene_entry['end']
+    new_gene_entry['start'] = gene_entry['start'] if cluster['strand'] == '+' else pas_position
 
-    return numbered_exons, numbered_introns, new_dog, pd.DataFrame([new_gene_entry]), pd.DataFrame([cluster]) if cluster else pd.DataFrame(), error_message
+    # create DOG regions from scratch and adjust for genome boundaries
+    new_dog = create_initial_dog(new_gene_entry, pas_position)
+    new_dog = adjust_for_genome_boundaries(new_dog, chrom_lengths)
+
+    numbered_exons, numbered_introns = number_exons_and_introns(exons_to_keep, introns_to_keep, gene_id, new_gene_entry['strand'])
+
+    error_message = None
+    if not new_dog.empty:
+        if len(new_dog) > 1:
+            error_message = "More than one DOG region found for gene " + gene_id
+        elif new_dog['strand'].iloc[0] != gene_entry['strand']:
+            error_message = "DOG strand does not match gene strand for gene " + gene_id
+        elif (cluster['strand'] == '+' and new_dog['start'].iloc[0] != pas_position) or \
+             (cluster['strand'] == '-' and new_dog['end'].iloc[0] != pas_position):
+            error_message = "DOG is not adjacent to PAS for gene " + gene_id + " (" + ('positive' if cluster['strand'] == '+' else 'negative') + " strand)"
+
+    return numbered_exons, numbered_introns, new_dog, pd.DataFrame([new_gene_entry]), pd.DataFrame([cluster]), error_message
+
 
 def process_gene_chunk(chunk_data):
-    exon_df, intron_df, dog_df, gene_df, downstream_positions_dict, window, gene_ids_chunk = chunk_data
+    exon_df, intron_df, gene_df, downstream_positions_dict, chrom_lengths, gene_ids_chunk = chunk_data
     chunk_exons, chunk_introns, chunk_dogs, chunk_genes, chunk_clusters = [], [], [], [], []
     discordant_pas = []
     cross_chromosome_clusters = defaultdict(int)
@@ -153,7 +205,6 @@ def process_gene_chunk(chunk_data):
         gene_chrom = gene_info['chrom']
         gene_strand = gene_info['strand']
         
- 
         gene_clusters = downstream_positions_dict.get(gene_id, [])
         
         # check for incompatible chromosomes
@@ -169,10 +220,10 @@ def process_gene_chunk(chunk_data):
         if valid_clusters:
             if gene_strand == '+':
                 cluster = max(valid_clusters, key=lambda x: x['end'])
-            else:  # '-' strand
+            else:  
                 cluster = min(valid_clusters, key=lambda x: x['start'])
         
-        exon, intron, dog, gene, cluster_data, error_message = adjust_regions_for_gene(gene_id, exon_df, intron_df, dog_df, gene_df, cluster, window)
+        exon, intron, dog, gene, cluster_data, error_message = adjust_regions_for_gene(gene_id, exon_df, intron_df, gene_df, cluster, chrom_lengths)
         chunk_exons.append(exon)
         chunk_introns.append(intron)
         chunk_dogs.append(dog)
@@ -200,18 +251,17 @@ def main():
     parser.add_argument("--gene", required=True, help="Path to gene BED file")
     parser.add_argument("--exon", required=True, help="Path to exon BED file")
     parser.add_argument("--intron", required=True, help="Path to intron BED file")
-    parser.add_argument("--dog", required=True, help="Path to downstream of gene BED file")
     parser.add_argument("--clusters", required=True, help="Path to polyA clusters BED file")
+    parser.add_argument("--fai", required=True, help="Path to genome FASTA index file")
     parser.add_argument("--output_dir", required=True, help="Directory to save output files")
-    parser.add_argument("--window", type=int, default=5, help="Window size for adjusting regions")
     parser.add_argument("--cores", type=int, default=os.cpu_count(), help="Number of CPU cores to use")
     args = parser.parse_args()
 
     exon_df = read_bed(args.exon)
     intron_df = read_bed(args.intron)
     gene_df = read_bed(args.gene)
-    dog_df = read_bed(args.dog)
     clusters_df = read_clusters(args.clusters)
+    chrom_lengths = read_fasta_index(args.fai)
 
     downstream_positions_dict = find_downstream_positions(clusters_df, gene_df)
     
@@ -219,14 +269,14 @@ def main():
         logging.warning("No valid downstream positions found. Outputting original annotations.")
         exon_df.to_csv(os.path.join(args.output_dir, 'updated_exon.bed'), sep='\t', header=False, index=False)
         intron_df.to_csv(os.path.join(args.output_dir, 'updated_intron.bed'), sep='\t', header=False, index=False)
-        dog_df.to_csv(os.path.join(args.output_dir, 'updated_downstream_of_gene.bed'), sep='\t', header=False, index=False)
         gene_df.to_csv(os.path.join(args.output_dir, 'updated_gene.bed'), sep='\t', header=False, index=False)
+        pd.DataFrame(columns=['chrom', 'start', 'end', 'gene_id', 'score', 'strand']).to_csv(os.path.join(args.output_dir, 'updated_downstream_of_gene.bed'), sep='\t', header=False, index=False)
         pd.DataFrame(columns=['chrom', 'start', 'end', 'name', 'score', 'strand', 'distance']).to_csv(os.path.join(args.output_dir, 'PAS.bed'), sep='\t', header=False, index=False)
         return
 
     gene_ids = gene_df['gene_id'].unique()
     gene_chunks = np.array_split(gene_ids, args.cores)
-    chunk_data = [(exon_df, intron_df, dog_df, gene_df, downstream_positions_dict, args.window, gene_chunk) for gene_chunk in gene_chunks]
+    chunk_data = [(exon_df, intron_df, gene_df, downstream_positions_dict, chrom_lengths, gene_chunk) for gene_chunk in gene_chunks]
 
     with ProcessPoolExecutor(max_workers=args.cores) as executor:
         results = list(tqdm(executor.map(process_gene_chunk, chunk_data), total=len(gene_chunks), desc="Processing genes"))
@@ -262,7 +312,6 @@ def main():
                        columns=['chrom', 'start', 'end', 'gene_id', 'combined', 'strand'])
     final_introns.to_csv(os.path.join(args.output_dir, 'updated_intron.bed'), sep='\t', header=False, index=False, 
                          columns=['chrom', 'start', 'end', 'gene_id', 'combined', 'strand'])
-
     final_dogs.to_csv(os.path.join(args.output_dir, 'updated_downstream_of_gene.bed'), sep='\t', header=False, index=False)
     final_genes.to_csv(os.path.join(args.output_dir, 'updated_gene.bed'), sep='\t', header=False, index=False)
     final_clusters.to_csv(os.path.join(args.output_dir, 'PAS.bed'), sep='\t', header=False, index=False)
