@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # intersect the bam file against, exons, genes, and dog regions
 def run_bedtools(bam_file, genome_file, output_dir, dog_bed_file, exon_bed_file, intron_bed_file, gene_bed_file, num_files=104):
  
-    # Convert bam to bed and calculate the 3' end coordinates 
+    # convert bam to bed and calculate the 3' end coordinates 
     bed_file, end_coordinates = bam_to_bed(bam_file, output_dir, num_files)
 
     # split bed file into chunks
