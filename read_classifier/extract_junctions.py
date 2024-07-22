@@ -4,6 +4,17 @@ import multiprocessing
 from functools import partial
 import logging 
 
+# if we're using a second-pass index
+# instead of de novo calculating introns
+# we can just use all the introns in the refined annotation 
+# this function converts the updated_intron.bed file to a format that can be used by the rest of the pipeline
+def process_intron_to_junctions(intron_bed):
+    df = pd.read_csv(intron_bed, sep='\t', header=None, 
+                     names=['Chromosome', 'Start', 'End', 'Gene_ID', 'Intron_ID', 'Strand'])
+    df['Counts'] = -1  # default count for annotated junction 
+    df = df[['Chromosome', 'Start', 'End', 'Gene_ID', 'Counts', 'Strand']]
+    return df
+
 def extract_region_splice_junctions(bam_file, region, gene_id_map):
     """
     Extract splice junctions for a specific region from a BAM file.

@@ -16,7 +16,7 @@ from intersect import run_bedtools
 from parse_intersect import parse_output
 from process_read_end_positions import calculate_distance_to_read_ends, get_transcript_ends
 from process_gtf import get_biotypes 
-from extract_junctions import parallel_extract_splice_junctions, summarize_junctions, filter_junctions 
+from extract_junctions import parallel_extract_splice_junctions, summarize_junctions, filter_junctions, process_intron_to_junctions
 
 sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
 from map_mm_tag_to_genome_position import extract_modifications
@@ -122,18 +122,27 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     # calculate distance to junctions if requested 
     if junction_distance: 
 
+        # use the junctions in the annotation if an index is provided 
+        if index_path and intron_bed:
+            logging.info("Using pre-computed introns from index")
+            final_junctions = process_intron_to_junctions(intron_bed)
+        else:
+
         # extract all junctions 
-        all_junctions = parallel_extract_splice_junctions(bam_file, num_cpus = cpu_count, gene_id_map=gene_id_map)
-        all_junctions.to_csv(output_dir + "/all_junctions.bed", sep="\t", index=False)
+            logging.info("Performing de novo junction discovery from alignments")
+            all_junctions = parallel_extract_splice_junctions(bam_file, num_cpus = cpu_count, gene_id_map=gene_id_map)
+            all_junctions.to_csv(output_dir + "/all_junctions.bed", sep="\t", index=False)
 
-        # collapse to unique junctions with support level of at least 2 alignments 
-        collapsed_junctions = summarize_junctions(all_junctions, 2)
+            # collapse to unique junctions with support level of at least 2 alignments 
+            logging.info("Summarising de novo junctions")
+            collapsed_junctions = summarize_junctions(all_junctions, 2)
 
-        # save junctions to bed file for future inspection 
-        collapsed_junctions.to_csv(output_dir + "/collapsed_junctions.bed", sep="\t", index=False)
+            # save junctions to bed file for future inspection 
+            collapsed_junctions.to_csv(output_dir + "/collapsed_junctions.bed", sep="\t", index=False)
 
-        # filter junctions
-        final_junctions = filter_junctions(collapsed_junctions)
+            # filter junctions
+            logging.info("Filtering de novo junctions")
+            final_junctions = filter_junctions(collapsed_junctions)
 
         # save junctions 
         with open(output_dir + "/final_junctions.bed", 'w') as file:
