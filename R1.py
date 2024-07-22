@@ -151,8 +151,8 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
 
         # convert junctions to donor final nucelotides 
         splice_donors = final_junctions.assign(
-            Start=lambda df: df.apply(lambda x: x['Start'] - 1 if x['Strand'] == '+' else x['End'], axis=1),
-            End=lambda df: df.apply(lambda x: x['Start'] if x['Strand'] == '+' else x['End'] + 1, axis=1)
+            Start=lambda df: df.apply(lambda x: x['Start'] if x['Strand'] == '+' else x['End'], axis=1),
+            End=lambda df: df.apply(lambda x: x['Start'] if x['Strand'] == '+' else x['End'], axis=1)
         ).rename(columns={'Chromosome': 'chromosome', 'Start': 'position', 'Strand': 'strand'})
 
         # calculate distances to nearest splice donors 

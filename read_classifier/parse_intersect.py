@@ -188,7 +188,8 @@ def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_
             chunk = df[df['gene_id'].isin(chunk_genes)].sort_values(by=['gene_id', 'read_end_chromosome', 'read_end_position'])
             temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=f'_3prime_{i}.sorted.bed', dir=output_dir)
             for _, row in chunk.iterrows():
-                temp_file.write(f"{row['gene_id']}_{row['read_end_chromosome']}\t{row['read_end_position']}\t{row['read_end_position']+1}\t{row['read_id']}\t.\t{row['read_end_strand']}\n")
+                # temp_file.write(f"{row['gene_id']}_{row['read_end_chromosome']}\t{row['read_end_position']}\t{row['read_end_position']+1}\t{row['read_id']}\t.\t{row['read_end_strand']}\n")
+                temp_file.write(f"{row['gene_id']}_{row['read_end_chromosome']}\t{row['read_end_position']}\t{row['read_end_position']}\t{row['read_id']}\t.\t{row['read_end_strand']}\n")
             temp_file.close()
             return temp_file.name
 
