@@ -1,152 +1,153 @@
 import pandas as pd
-import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np
+from collections import defaultdict
 import logging
 import os
 import tempfile
+import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from parallel_bed_operations import split_bed_file
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
-def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_bed_file, intron_bed_file, gene_id_map, min_overlap=5):
+def process_read(intervals, window_size=6):
+    intervals.sort(key=lambda x: x[1])  # sort by start 
+    total_width = sum(x[2] - x[1] for x in intervals)
+    if total_width < window_size:
+        return []
     
-    logging.info(f"Processing {len(temp_bed_files)} temp bed files")
+    strand = intervals[0][5]
+    remaining = window_size
+    result = []
     
-    def process_bed_chunk(bed_chunk):
-        base_name = os.path.splitext(os.path.basename(bed_chunk))[0]
-        with tempfile.NamedTemporaryFile(mode='w+t', dir=output_dir, suffix=f'_{base_name}_3prime_15nt.bed', delete=False) as output_file:
-            output_path = output_file.name
-        
-        # extract 3' 15 nt and filter invalid reads
-        process_cmd = f"""
-        awk 'BEGIN {{OFS="\t"}}
-        {{
-            if (!($4 in chrom)) {{
-                chrom[$4] = $1;
-                strand[$4] = $6;
-                total_width[$4] = 0;
-                intervals[$4] = "";
-            }}
-            if (chrom[$4] != $1 || strand[$4] != $6) {{
-                print $4 > "{output_dir}/{base_name}_invalid_reads.txt";
-                next;
-            }}
-            total_width[$4] += $3 - $2;
-            intervals[$4] = intervals[$4] " " $0;
-        }}
-        END {{
-            for (read in total_width) {{
-                if (total_width[read] < 15) {{
-                    print read > "{output_dir}/{base_name}_invalid_reads.txt";
-                    continue;
-                }}
-                split(intervals[read], arr);
-                if (strand[read] == "+") {{
-                    remaining = 15;
-                    for (i = NF; i > 0; i -= 6) {{
-                        start = arr[i-4];
-                        end = arr[i-3];
-                        width = end - start;
-                        if (width >= remaining) {{
-                            print arr[i-5], end - remaining, end, read, arr[i-1], arr[i];
-                            break;
-                        }} else {{
-                            print arr[i-5], start, end, read, arr[i-1], arr[i];
-                            remaining -= width;
-                        }}
-                    }}
-                }} else {{
-                    remaining = 15;
-                    for (i = 1; i <= NF; i += 6) {{
-                        start = arr[i+1];
-                        end = arr[i+2];
-                        width = end - start;
-                        if (width >= remaining) {{
-                            print arr[i], start, start + remaining, read, arr[i+4], arr[i+5];
-                            break;
-                        }} else {{
-                            print arr[i], start, end, read, arr[i+4], arr[i+5];
-                            remaining -= width;
-                        }}
-                    }}
-                }}
-            }}
-        }}' {bed_chunk} | sort -k1,1 -k2,2n > {output_path}
-        """
-        subprocess.run(process_cmd, shell=True, check=True)
-        
-        return output_path
+    if strand == '+':
+        for interval in reversed(intervals):
+            chrom, start, end = interval[0], interval[1], interval[2]
+            width = end - start
+            if width >= remaining:
+                result.append((chrom, end - remaining, end) + interval[3:])
+                break
+            else:
+                result.append(interval)
+                remaining -= width
+    else:
+        for interval in intervals:
+            chrom, start, end = interval[0], interval[1], interval[2]
+            width = end - start
+            if width >= remaining:
+                result.append((chrom, start, start + remaining) + interval[3:])
+                break
+            else:
+                result.append(interval)
+                remaining -= width
+    
+    return result
 
-    # process all bed chunks in parallel
-    with ThreadPoolExecutor() as executor:
-        future_to_file = {executor.submit(process_bed_chunk, file): file for file in temp_bed_files}
-        processed_files = []
-        for future in as_completed(future_to_file):
-            file = future_to_file[future]
-            try:
-                result = future.result()
-                processed_files.append(result)
-            except Exception as exc:
-                logging.error(f'{file} generated an exception: {exc}')
-
-    # merge processed files
-    with tempfile.NamedTemporaryFile(mode='w+t', dir=output_dir, suffix='_merged_3prime_15nt.bed', delete=False) as merged_file:
-        merged_path = merged_file.name
-    merge_cmd = f"cat {' '.join(processed_files)} | sort -k1,1 -k2,2n > {merged_path}"
-    subprocess.run(merge_cmd, shell=True, check=True)
-
-    # intersect with feature files
+def intersect_and_process_chunk(bed_chunk, feature_files, genome_file, output_dir, gene_id_map, min_overlap=4):
     results = {}
-    for feature, feature_file in [("exon", exon_bed_file), ("intron", intron_bed_file), ("dog", dog_bed_file)]:
-        with tempfile.NamedTemporaryFile(mode='w+t', dir=output_dir, suffix=f'_intersect_{feature}.bed', delete=False) as intersect_file:
-            intersect_path = intersect_file.name
-        intersect_cmd = f"bedtools intersect -a {merged_path} -b {feature_file} -wo -s -sorted -g {genome_file} > {intersect_path}"
-        subprocess.run(intersect_cmd, shell=True, check=True)
+    for feature, feature_file in feature_files.items():
+        intersect_file = os.path.join(output_dir, f'{os.path.basename(bed_chunk)}_intersect_{feature}.bed')
+        cmd = f"bedtools intersect -a {bed_chunk} -b {feature_file} -wo -s -sorted -g {genome_file} > {intersect_file}"
+        subprocess.run(cmd, shell=True, check=True)
         
-        with open(intersect_path, 'r') as f:
+        with open(intersect_file, 'r') as f:
             for line in f:
                 fields = line.strip().split('\t')
                 read_id = fields[3]
-                feature_info = fields[-3]  # e.g. "ENSG00000136997_region_DOG" or "ENSG00000136997_exon_1"
-                # print(f"Feature info: {feature_info}")
+                feature_info = fields[-3]
                 parts = feature_info.split('_')
                 if len(parts) >= 3:
                     gene_id = '_'.join(parts[:-2])  
-                    feature = '_'.join(parts[-2:])  # feature, e.g., "region_DOG"
+                    feature = '_'.join(parts[-2:])
                 else:
-                    gene_id = feature_info  # use whole string if splitting is not applicable
-                    feature = "Unknown"  # default feature if splitting does not work
+                    gene_id = feature_info
+                    feature = "Unknown"
 
                 if read_id not in gene_id_map or gene_id_map[read_id] != gene_id:
                     continue
 
                 overlap = int(fields[-1])
+                if overlap < min_overlap:
+                    continue
+                
                 if read_id not in results:
                     results[read_id] = {}
                 if feature not in results[read_id]:
                     results[read_id][feature] = 0
                 results[read_id][feature] += overlap
 
+    return results
+
+def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_bed_file, intron_bed_file, gene_id_map, min_overlap=4, num_chunks=104):
+    logging.info(f"Processing {len(temp_bed_files)} temp bed files")
+    
+    all_reads = defaultdict(list)
+    
+    # read all bed chunks and combine reads
+    for bed_chunk in temp_bed_files:
+        df = pd.read_csv(bed_chunk, sep='\t', header=None, 
+                         names=['chrom', 'start', 'end', 'read_id', 'score', 'strand'])
+        for _, row in df.iterrows():
+            all_reads[row['read_id']].append(tuple(row))
+    
+    logging.info(f"Total reads: {len(all_reads)}")
+    
+    # process all reads
+    processed_reads = []
+    for read_id, intervals in all_reads.items():
+        processed = process_read(intervals, window_size=6)
+        processed_reads.extend(processed)
+    
+    # sort for bedtools intersect 
+    processed_reads.sort(key=lambda x: (x[0], x[1], x[2]))
+    
+    with tempfile.NamedTemporaryFile(mode='w+t', dir=output_dir, suffix='_processed_3prime_6nt.bed', delete=False) as temp_file:
+        for interval in processed_reads:
+            temp_file.write('\t'.join(map(str, interval)) + '\n')
+        processed_file = temp_file.name
+    
+    logging.info(f"Processed reads written to {processed_file}")
+    
+    # split the processed file into chunks
+    temp_bed_chunks = split_bed_file(processed_file, output_dir, num_chunks)
+    
+    feature_files = {
+        "exon": exon_bed_file,
+        "intron": intron_bed_file,
+        "dog": dog_bed_file
+    }
+    
+    with ThreadPoolExecutor(max_workers=num_chunks) as executor:
+        future_to_chunk = {executor.submit(intersect_and_process_chunk, chunk, feature_files, genome_file, output_dir, gene_id_map, min_overlap): chunk for chunk in temp_bed_chunks}
+        chunk_results = []
+        for future in as_completed(future_to_chunk):
+            chunk_results.append(future.result())
+    
+    # merge chunks
+    merged_results = {}
+    for chunk_result in chunk_results:
+        for read_id, features in chunk_result.items():
+            if read_id not in merged_results:
+                merged_results[read_id] = features
+            else:
+                for feature, overlap in features.items():
+                    if feature not in merged_results[read_id]:
+                        merged_results[read_id][feature] = overlap
+                    else:
+                        merged_results[read_id][feature] += overlap
 
     # retain the best feature per read_id based on maximum overlap
     final_data = []
-    for read_id, features in results.items():
-        best_feature = None
-        max_overlap = -1
-        for feature, overlap in features.items():
-            if overlap > max_overlap:
-                best_feature = (gene_id_map[read_id], feature)
-                max_overlap = overlap
-        if best_feature:
-            final_data.append({'read_id': read_id, 'gene_id': best_feature[0], 'feature': best_feature[1]})
+    for read_id, features in merged_results.items():
+        if features:
+            best_feature = max(features.items(), key=lambda x: x[1])
+            final_data.append({'read_id': read_id, 'gene_id': gene_id_map[read_id], 'feature': best_feature[0]})
 
-    # create final df 
     df = pd.DataFrame(final_data)
     if not df.empty:
-        df.set_index('read_id', inplace=True)  # Set 'read_id' as index if df is not empty
-        logging.info("DataFrame created and indexed by read_id.")
+        df.set_index('read_id', inplace=True)
+        logging.info(f"DataFrame created with {len(df)} rows, indexed by read_id.")
     else:
         logging.warning("No valid data processed into DataFrame; DataFrame is empty.")
-        
-    # print(df.head())
 
     return df
