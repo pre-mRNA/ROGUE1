@@ -15,6 +15,7 @@ from gtf_to_bed import gtf_to_bed, extend_gene_bed, sort_bed_file
 from intersect import run_bedtools
 from parse_intersect import parse_output
 from process_read_end_positions import calculate_distance_to_read_ends, get_transcript_ends
+from fetch_read_end_feature import get_end_feature
 from process_gtf import get_biotypes 
 from extract_junctions import parallel_extract_splice_junctions, summarize_junctions, filter_junctions, process_intron_to_junctions
 
@@ -99,6 +100,12 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     
     # store a dict of read_id and gene_id 
     gene_id_map = df.set_index('read_id')['gene_id'].to_dict()
+
+    # get read end feature 
+    end_features = get_end_feature(intersect_files[6], genome_file, output_dir, dog_bed, exon_bed, intron_bed, gene_id_map)
+    df = pd.merge(df, end_features, on=['read_id', 'gene_id'], how='left')
+    df.rename(columns={'feature': 'three_prime_feature'}, inplace=True)
+    df = df[[c for c in df.columns if c != 'three_prime_feature'][:df.columns.get_loc('read_end_strand')+1] + ['three_prime_feature'] + [c for c in df.columns if c != 'three_prime_feature'][df.columns.get_loc('read_end_strand')+1:]]
 
     # extract and merge the modifications if mods are calculated 
     if calculate_modifications:

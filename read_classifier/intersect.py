@@ -44,4 +44,4 @@ def run_bedtools(bam_file, genome_file, output_dir, dog_bed_file, exon_bed_file,
         process = subprocess.Popen(cmd, shell=True)
         process.wait()
 
-    return f"{bed_file}_exon_overlap_final.bed", f"{bed_file}_intron_overlap_final.bed", f"{bed_file}_gene_overlap_final.bed", f"{bed_file}_dog_overlap_final.bed", bed_file, end_coordinates
+    return f"{bed_file}_exon_overlap_final.bed", f"{bed_file}_intron_overlap_final.bed", f"{bed_file}_gene_overlap_final.bed", f"{bed_file}_dog_overlap_final.bed", bed_file, end_coordinates, temp_bed_files
