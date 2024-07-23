@@ -83,7 +83,6 @@ def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_
     
     all_reads = defaultdict(list)
     
-    # read all bed chunks and combine reads
     for bed_chunk in temp_bed_files:
         df = pd.read_csv(bed_chunk, sep='\t', header=None, 
                          names=['chrom', 'start', 'end', 'read_id', 'score', 'strand'])
@@ -92,14 +91,10 @@ def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_
     
     logging.info(f"Total reads: {len(all_reads)}")
     
-    # process all reads
     processed_reads = []
     for read_id, intervals in all_reads.items():
         processed = process_read(intervals, window_size=6)
         processed_reads.extend(processed)
-    
-    # sort for bedtools intersect 
-    processed_reads.sort(key=lambda x: (x[0], x[1], x[2]))
     
     with tempfile.NamedTemporaryFile(mode='w+t', dir=output_dir, suffix='_processed_3prime_6nt.bed', delete=False) as temp_file:
         for interval in processed_reads:
@@ -107,6 +102,20 @@ def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_
         processed_file = temp_file.name
     
     logging.info(f"Processed reads written to {processed_file}")
+    
+    # use system sort
+    logging.info("Sorting processed reads")
+    sorted_file = os.path.join(output_dir, 'sorted_processed_reads.bed')
+    sort_command = f"sort -V -k1,1 -k2,2n -k3,3n --parallel={os.cpu_count()} -S 80% -T {output_dir} {processed_file} > {sorted_file}"
+
+    try:
+        subprocess.run(sort_command, shell=True, check=True)
+        logging.info(f"Sorted reads written to {sorted_file}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error occurred while sorting: {e}")
+        raise
+
+    processed_file = sorted_file
     
     # split the processed file into chunks
     temp_bed_chunks = split_bed_file(processed_file, output_dir, num_chunks)
