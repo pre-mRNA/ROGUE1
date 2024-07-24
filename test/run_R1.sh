@@ -23,7 +23,7 @@ time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --index ${index} 
 # color the bam 
 time python3 ~/R1/color_bam/color_bam_from_3prime_feature.py -ibam $bam -obam ${bam%.*}_color_threeprime.bam -table ${output}
 
-
+# color the bam after adjusting the DOG alignments in 
 
 
 # run R1 while calculating modifications 
