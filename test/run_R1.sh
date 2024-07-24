@@ -20,6 +20,8 @@ export gtf="/home/150/as7425/R1/test/data/myc.gtf"
 # run R1 with index 
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --index ${index} --record_exons #> ${out_dir}/ROGUE1-log.txt 2>&1
 
+# color the bam 
+time python3 ~/R1/color_bam/color_bam_from_3prime_feature.py -ibam $bam -obam ${bam%.*}_color_threeprime.bam -table ${output}
 
 
 

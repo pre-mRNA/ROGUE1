@@ -5,7 +5,7 @@ import os
 import sys
 from bam_header_utils import update_pg_header
 
-# mapping of classifications to colors
+# mapping classifications to colors
 CLASSIFICATION_COLOR_MAP = {
     'intron': '255,0,112',
     'spliced': '51,153,255',
