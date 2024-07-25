@@ -19,13 +19,19 @@ export gtf="/home/150/as7425/R1/test/data/myc.gtf"
 
 # run R1 with index 
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --index ${index} --record_exons #> ${out_dir}/ROGUE1-log.txt 2>&1
+wc -l $output
 
-# color the bam 
-time python3 ~/R1/color_bam/color_bam_from_3prime_feature.py -ibam $bam -obam ${bam%.*}_color_threeprime.bam -table ${output}
+# classify the splicing from acceptor 
+time python3 ~/R1/classify_splicing/run_classify_splicing_from_acceptor.py ${output} "${output%.*}_classify.tsv"
+wc -l "${output%.*}_classify.tsv"
 
-# color the bam after adjusting the DOG alignments in 
+# add tags for 3' features 
+time python3 ~/R1/color_bam/color_bam_from_3prime_feature.py -ibam $bam -obam ${bam%.*}_color_threeprime.bam -table ${output} # use original R1 output 
 
+# color bam from splicing status 
+time python3 ~/R1/color_bam/color_bam_from_list.py -ibam "${bam%.*}_color_threeprime.bam" -obam "${bam%.*}_tag_threeprime_color_splicing.bam" -class_file "${output%.*}_classify.tsv"
 
+##########################################################################################
 # run R1 while calculating modifications 
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -m -j 
 wc -l ${output}

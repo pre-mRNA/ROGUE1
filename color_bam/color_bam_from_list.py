@@ -10,7 +10,8 @@ CLASSIFICATION_COLOR_MAP = {
     'intron': '255,0,112',
     'spliced': '51,153,255',
     'ambiguous': '255,102,0',
-    'intron_retained': '255,0,112'  # added mapping for intron_retained
+    'intron_retained': '255,0,112',  # added mapping for intron_retained
+    'fully-unspliced': '255,0,112' # fully unspliced is the same as intron
 }
 
 def get_version():
@@ -35,42 +36,42 @@ def validate_color(color):
             raise ValueError("each RGB value must be between 0 and 255.")
     return color
 
-def load_classifications(file_path):
+def load_splicing_classifications(file_path):
 
     # read classification file into a dataframe
     df = pd.read_csv(file_path, sep='\t')
-    df = df[['read_id', 'classification']]
+    df = df[['read_id', 'splicing_classification']]
 
-    # map classifications to colors and validate
-    df['color'] = df['classification'].map(CLASSIFICATION_COLOR_MAP)
+    # map splicing_classifications to colors and validate
+    df['color'] = df['splicing_classification'].map(CLASSIFICATION_COLOR_MAP)
     
     # check for any NaN values in the 'color' column
     if df['color'].isna().any():
-        missing_classes = df[df['color'].isna()]['classification'].unique()
-        raise ValueError(f"Unrecognized classifications found: {', '.join(missing_classes)}")
+        missing_classes = df[df['color'].isna()]['splicing_classification'].unique()
+        raise ValueError(f"Unrecognized splicing_classifications found: {', '.join(missing_classes)}")
 
     # validate colors
     df['color'] = df['color'].apply(validate_color)
     
-    return df.set_index('read_id')[['color', 'classification']].to_dict('index')
+    return df.set_index('read_id')[['color', 'splicing_classification']].to_dict('index')
 
 def main():
-    parser = argparse.ArgumentParser(description="Set specific RGB colors for read IDs in a BAM file based on classifications.")
+    parser = argparse.ArgumentParser(description="Set specific RGB colors for read IDs in a BAM file based on splicing_classifications.")
     parser.add_argument("-ibam", required=True, help="Input BAM file")
     parser.add_argument("-obam", required=True, help="Output BAM file")
-    parser.add_argument("-class_file", required=True, help="File containing read IDs and their classifications")
+    parser.add_argument("-class_file", required=True, help="File containing read IDs and their splicing_classifications")
 
     args = parser.parse_args()
 
-    # load classifications from the provided file
-    classifications = load_classifications(args.class_file)
+    # load splicing_classifications from the provided file
+    splicing_classifications = load_splicing_classifications(args.class_file)
 
     modified_count = 0  # count modified reads
-    missing_reads = set(classifications.keys())  # initialize missing reads with all read_ids from classification file
+    missing_reads = set(splicing_classifications.keys())  # initialize missing reads with all read_ids from splicing_classification file
 
     # prepare bam header entry 
     command_line = ' '.join(['python'] + sys.argv)
-    description = 'Colored reads based on splicing classifications and added SC tag'
+    description = 'Colored reads based on splicing splicing_classifications and added SC tag'
     
     with pysam.AlignmentFile(args.ibam, 'rb', threads=48) as infile:
         header = infile.header.to_dict()
@@ -78,11 +79,11 @@ def main():
 
         with pysam.AlignmentFile(args.obam, 'wb', header=header, threads=48) as outfile:
             for read in infile:
-                if read.query_name in classifications:
-                    color = classifications[read.query_name]['color']
-                    classification = classifications[read.query_name]['classification']
+                if read.query_name in splicing_classifications:
+                    color = splicing_classifications[read.query_name]['color']
+                    splicing_classification = splicing_classifications[read.query_name]['splicing_classification']
                     read.set_tag("YC", color)
-                    read.set_tag("SC", classification, value_type='Z')
+                    read.set_tag("SC", splicing_classification, value_type='Z')
                     modified_count += 1
                     missing_reads.discard(read.query_name)
                 outfile.write(read)
