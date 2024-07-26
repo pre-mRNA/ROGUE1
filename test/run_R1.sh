@@ -31,6 +31,12 @@ time python3 ~/R1/color_bam/color_bam_from_3prime_feature.py -ibam $bam -obam ${
 # color bam from splicing status 
 time python3 ~/R1/color_bam/color_bam_from_list.py -ibam "${bam%.*}_color_threeprime.bam" -obam "${bam%.*}_tag_threeprime_color_splicing.bam" -class_file "${output%.*}_classify.tsv"
 
+# add RE and AL tags 
+time python3 ~/R1/igv/create_bam_re_tag.py -ibam "${bam%.*}_tag_threeprime_color_splicing.bam" -obam "${bam%.*}_tag_threeprime_color_splicing_RE-AL.bam"
+
+# color by distance to donor 
+time python3 ~/R1/color_bam/color_bam_from_donor_distance.py -q 50,100 -ibam "${bam%.*}_tag_threeprime_color_splicing_RE-AL.bam" -obam "${bam%.*}_tag_threeprime_color_splicing_RE-AL_pA-dist.bam" --class-file ${output}
+
 ##########################################################################################
 # run R1 while calculating modifications 
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -m -j 
