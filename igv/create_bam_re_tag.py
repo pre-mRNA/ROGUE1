@@ -51,10 +51,15 @@ def main():
             aligned_bases = calculate_aligned_bases(read)
             read.set_tag("AL", aligned_bases, value_type='i')
             
-            # add TT tag, which is total transcrit position 
+            # add TT tag, which is total transcript position 
             # read end coord followed by read start coord 
             tt_value = f"{last_position}.{first_position}"
             read.set_tag("TT", tt_value, value_type='Z')
+
+            # add TA tag, which is total transcript end position and aligned length 
+            # read end coord followed by aligned length
+            tt_value = f"{last_position}.{aligned_bases}"
+            read.set_tag("TA", tt_value, value_type='Z')
 
             outfile.write(read)
             modified_count += 1
