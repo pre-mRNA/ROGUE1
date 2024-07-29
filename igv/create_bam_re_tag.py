@@ -47,10 +47,15 @@ def main():
             # RS tag allows sorting for minus strand alignments by pol II position 
             read.set_tag("RS", first_position, value_type='i')
 
-            # Add AL tag with the total number of aligned bases     
+            # AL tag with the total number of aligned bases     
             aligned_bases = calculate_aligned_bases(read)
             read.set_tag("AL", aligned_bases, value_type='i')
             
+            # add TT tag, which is total transcrit position 
+            # read end coord followed by read start coord 
+            tt_value = f"{last_position}.{first_position}"
+            read.set_tag("TT", tt_value, value_type='Z')
+
             outfile.write(read)
             modified_count += 1
 
