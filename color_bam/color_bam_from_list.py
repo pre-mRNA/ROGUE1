@@ -10,8 +10,11 @@ CLASSIFICATION_COLOR_MAP = {
     'intron': '255,0,112',
     'spliced': '51,153,255',
     'ambiguous': '255,102,0',
+    'discard': '255,102,0',
     'intron_retained': '255,0,112',  # added mapping for intron_retained
-    'fully-unspliced': '255,0,112' # fully unspliced is the same as intron
+    'fully-unspliced': '255,0,112', # fully unspliced is the same as intron
+    'fully_unspliced': '255,0,112', # fully unspliced is the same as intron
+    'partially_spliced': '250,0,255' # partially-spliced
 }
 
 def get_version():
