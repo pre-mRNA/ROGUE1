@@ -63,6 +63,7 @@ def main():
     parser.add_argument("-ibam", required=True, help="Input BAM file")
     parser.add_argument("-obam", required=True, help="Output BAM file")
     parser.add_argument("-class_file", required=True, help="File containing read IDs and their splicing_classifications")
+    parser.add_argument("--reset", action='store_true', help="Reset SC and YC tags before updating")
 
     args = parser.parse_args()
 
@@ -82,6 +83,9 @@ def main():
 
         with pysam.AlignmentFile(args.obam, 'wb', header=header, threads=48) as outfile:
             for read in infile:
+                if args.reset:
+                    read.set_tag("YC", None)
+                    read.set_tag("SC", None)
                 if read.query_name in splicing_classifications:
                     color = splicing_classifications[read.query_name]['color']
                     splicing_classification = splicing_classifications[read.query_name]['splicing_classification']
