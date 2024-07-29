@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 
 # fetch ROGUE1 version 
@@ -22,18 +23,24 @@ def get_version():
 
         return "unknown"
 
-# create the ROGUE1 PG header entry
+
 def create_pg_header(header, command_line, description):
-    
     version = get_version()
     
-    # find the last PG entry to set as the previous program and determine the next ID
+    # determine the next ID
     last_pg = None
     next_id = 1
     if 'PG' in header:
         last_pg = header['PG'][-1]
-        last_id_num = int(last_pg['ID'].split('.')[-1])
-        next_id = last_id_num + 1
+        
+        # fetch numeric parts from existing IDs
+        numeric_ids = [int(num) for pg in header['PG'] for num in re.findall(r'\d+', pg['ID'])]
+        
+        if numeric_ids:
+            next_id = max(numeric_ids) + 1
+        else:
+            # if no IDs found, use the length of PG entries + 1
+            next_id = len(header['PG']) + 1
 
     new_header_entry = {
         'ID': f'ROGUE1.{next_id}',
@@ -49,11 +56,17 @@ def create_pg_header(header, command_line, description):
     return new_header_entry
 
 def update_pg_header(header, command_line, description):
-    new_header_entry = create_pg_header(header, command_line, description)
-    
-    if 'PG' in header:
-        header['PG'].append(new_header_entry)
-    else:
-        header['PG'] = [new_header_entry]
-    
-    return header
+    try:
+        new_header_entry = create_pg_header(header, command_line, description)
+        
+        if 'PG' in header:
+            header['PG'].append(new_header_entry)
+        else:
+            header['PG'] = [new_header_entry]
+        
+        return header
+    except Exception as e:
+        print(f"Error updating PG header: {str(e)}")
+        
+        # if error, return original header 
+        return header
