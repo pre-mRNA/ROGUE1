@@ -7,15 +7,19 @@ export out_dir="${scratch}/R1/test/outputs/${target_gene}/"; mkdir -p ${out_dir}
 export output="${out_dir}/output_table.tsv"
 export index="/g/data/lf10/as7425/2023_mrna-biogenesis-maps/analysis/204-06-17_ROGUE1-splicing-order/annotation_with_clusters"
 
-# bam="/home/150/as7425/R1/test/data/merged.bam"
-# gtf="/home/150/as7425/R1/test/data/merged.gtf"
+bam="/home/150/as7425/R1/test/data/merged.bam"
+gtf="/home/150/as7425/R1/test/data/merged.gtf"
 
 # run R1 without calculating modifications
 # time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j > ${out_dir}/ROGUE1-log.txt 2>&1
 
-# myc
-export bam="/home/150/as7425/R1/test/data/myc_point.bam"
-export gtf="/home/150/as7425/R1/test/data/myc.gtf"
+# # myc
+# export bam="/home/150/as7425/R1/test/data/myc_point.bam"
+# export gtf="/home/150/as7425/R1/test/data/myc.gtf"
+
+# run R1 without index 
+time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --record_exons #> ${out_dir}/ROGUE1-log.txt 2>&1
+wc -l $output
 
 # run R1 with index 
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --index ${index} --record_exons #> ${out_dir}/ROGUE1-log.txt 2>&1

@@ -11,7 +11,7 @@ import shutil
 # function imports 
 sys.path.append("/home/150/as7425/R1/read_classifier/")
 from process_genome import generate_genome_file, read_chromosomes_from_genome_file, filter_bed_by_chromosome_inplace
-from gtf_to_bed import gtf_to_bed, extend_gene_bed, sort_bed_file
+from gtf_to_bed import gtf_to_bed, extend_gene_bed, sort_bed_file, number_exons_and_introns_in_bed
 from intersect import run_bedtools
 from parse_intersect import parse_output
 from process_read_end_positions import calculate_distance_to_read_ends, get_transcript_ends
@@ -78,10 +78,18 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
             logging.warning("Some required files are missing in the index path. Creating new index files.")
             index_path = None
 
+    # create an index on the fly 
     if not index_path:
         gene_bed = gtf_to_bed(gtf_file, "gene", output_dir)
-        exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
-        intron_bed = gtf_to_bed(gtf_file, "intron", output_dir)
+        
+        unsorted_exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
+        exon_bed = os.path.join(output_dir, 'numbered_exon.bed')
+        number_exons_and_introns_in_bed(unsorted_exon_bed, exon_bed, 'exon') # add exon numbers to bed col5
+
+        unsorted_intron_bed = gtf_to_bed(gtf_file, "intron", output_dir)
+        intron_bed = os.path.join(output_dir, 'numbered_intron.bed')
+        number_exons_and_introns_in_bed(unsorted_intron_bed, intron_bed, 'intron') # add exon numbers to bed col5
+
         dog_bed = extend_gene_bed(gene_bed, output_dir, genome_file)
 
         # filter annotations for relevant chromosomes 
@@ -103,6 +111,7 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
 
     # get read end feature 
     end_features = get_end_feature(intersect_files[6], genome_file, output_dir, dog_bed, exon_bed, intron_bed, gene_id_map)
+
     df = pd.merge(df, end_features, on=['read_id', 'gene_id'], how='left')
     df.rename(columns={'feature': 'three_prime_feature'}, inplace=True)
     df = df[[c for c in df.columns if c != 'three_prime_feature'][:df.columns.get_loc('read_end_strand')+1] + ['three_prime_feature'] + [c for c in df.columns if c != 'three_prime_feature'][df.columns.get_loc('read_end_strand')+1:]]

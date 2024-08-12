@@ -1,4 +1,5 @@
 import os
+import tempfile 
 from tempfile import NamedTemporaryFile
 import subprocess
 import pandas as pd
@@ -38,34 +39,66 @@ def gtf_to_bed(gtf_file, feature_type, output_dir):
     run_command(cmd, f"Converting {feature_type} GTF to BED")
     return bed_file
 
-    # takes as input the bedfile of genes and extends them to DOG regions by a fixed number of bases 
+# number exons and introns by strand 
+def number_exons_and_introns_in_bed(input_bed, output_bed, feature_type):
+    df = pd.read_csv(input_bed, sep='\t', header=None, 
+                     names=['chrom', 'start', 'end', 'gene_id', 'score', 'strand'])
+    
+    # number features grouped by gene and considering strand 
+    def number_features(group):
+        if group['strand'].iloc[0] == '+':
+            group = group.sort_values('start')
+        else:
+            group = group.sort_values('start', ascending=False)
+        
+        group['number'] = range(1, len(group) + 1)
+        return group
+
+    df = df.groupby('gene_id').apply(number_features).reset_index(drop=True)
+    
+    # create exon/intron labels 
+    df['combined'] = df['gene_id'] + '_' + feature_type + '_' + df['number'].astype(str)
+    
+    # write to a temporary file and sort 
+    with tempfile.NamedTemporaryFile(mode='w+t', delete=False, suffix='.bed') as temp_file:
+        df.to_csv(temp_file.name, sep='\t', header=False, index=False, 
+                  columns=['chrom', 'start', 'end', 'gene_id', 'combined', 'strand'])
+    
+    sort_bed_file(temp_file.name, output_bed)
+    os.unlink(temp_file.name)
+    
+# extends gene region ends to create downstream-of-gene regions 
 def extend_gene_bed(gene_bed_file, output_dir, genome_file, extend_bases=500):
     extended_bed = NamedTemporaryFile(dir=output_dir, delete=False, suffix="_extendedGene.bed").name
 
-    # Read the genome file into a dictionary
     genome = pd.read_csv(genome_file, sep="\t", header=None, index_col=0, squeeze=True).to_dict()
 
+    # use gene bed file 
     df = pd.read_csv(gene_bed_file, sep="\t", header=None)
 
-    # Extend the end coordinates and cap them at the corresponding genome length
-    # df[[1,2]] = df.apply(lambda x: [x[2], min(max(0, x[2] + extend_bases), genome.get(x[0], x[2]))] if x[5]=="+" else [max(0, min(x[1]-extend_bases, genome.get(x[0], x[1]))), x[1]], axis=1, result_type='expand')
-    # Extend the end coordinates based on the strand
-    # Extend the gene coordinates based on the strand
-    # Extend the gene coordinates based on the strand
+    # extend depending on strand 
     df[[1, 2]] = df.apply(
         lambda x: [x[2], min(x[2] + extend_bases, genome.get(x[0], float('inf')))] if x[5] == "+" 
         else [max(x[1] - extend_bases, 0), x[1]], axis=1, result_type='expand')
 
-    # Check if there are chromosomes not found in the genome file
+    # check if there are chromosomes not found in the genome file
     # missing_chromosomes = set(df[0].unique()) - set(genome.keys())
     # if missing_chromosomes:
     #     print(f"Warning: The following chromosomes were not found in the genome file: {', '.join(missing_chromosomes)}")
 
-    print(df.head())  # Check the first few entries to see how they are modified
-    print(genome)  # Print the genome dictionary to ensure correct chromosome lengths
+    # debug 
+    # print(df.head())  # check the first few entries to see how they are modified
+    # print(genome)  # print the genome dictionary to ensure correct chromosome lengths
 
-    df.sort_values([0, 1], inplace=True)
+    # add region label 
+    df[4] = df[3] + "_region_DOG"
+    
+    # sort equivalent to -k1,1 -k2,2n; type convert to enable this
+    df[0] = df[0].astype(str)
+    df[1] = df[1].astype(int)
+    df = df.sort_values(by=[0, 1])
 
+    # save
     df.to_csv(extended_bed, sep="\t", header=False, index=False)
 
     return extended_bed

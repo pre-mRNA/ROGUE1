@@ -45,16 +45,19 @@ def process_read(intervals, window_size=6):
 
 def intersect_and_process_chunk(bed_chunk, feature_files, genome_file, output_dir, gene_id_map, min_overlap=4):
     results = {}
+
+    # intersect reads against exons, introns and DOG regions
     for feature, feature_file in feature_files.items():
-        intersect_file = os.path.join(output_dir, f'{os.path.basename(bed_chunk)}_intersect_{feature}.bed')
+
+        intersect_file = os.path.join(output_dir, f'{os.path.basename(bed_chunk)}_intersect_3prime_{feature}.bed')
         cmd = f"bedtools intersect -a {bed_chunk} -b {feature_file} -wo -s -sorted -g {genome_file} > {intersect_file}"
         subprocess.run(cmd, shell=True, check=True)
         
         with open(intersect_file, 'r') as f:
             for line in f:
                 fields = line.strip().split('\t')
-                read_id = fields[3]
-                feature_info = fields[-3]
+                read_id = fields[3] # read ID is third col
+                feature_info = fields[-3] # feature info is in the third to last col 
                 parts = feature_info.split('_')
                 if len(parts) >= 3:
                     gene_id = '_'.join(parts[:-2])  
@@ -79,7 +82,7 @@ def intersect_and_process_chunk(bed_chunk, feature_files, genome_file, output_di
     return results
 
 def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_bed_file, intron_bed_file, gene_id_map, min_overlap=4, num_chunks=104):
-    logging.info(f"Processing {len(temp_bed_files)} temp bed files")
+    logging.info(f"Calculating read end feature for {len(temp_bed_files)} bed files")
     
     all_reads = defaultdict(list)
     
@@ -89,7 +92,7 @@ def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_
         for _, row in df.iterrows():
             all_reads[row['read_id']].append(tuple(row))
     
-    logging.info(f"Total reads: {len(all_reads)}")
+    logging.info(f"Total reads for end feature processing: {len(all_reads)}")
     
     processed_reads = []
     for read_id, intervals in all_reads.items():
@@ -101,11 +104,11 @@ def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_
             temp_file.write('\t'.join(map(str, interval)) + '\n')
         processed_file = temp_file.name
     
-    logging.info(f"Processed reads written to {processed_file}")
+    logging.info(f"Read end positions written to {processed_file}")
     
     # use system sort
-    logging.info("Sorting processed reads")
-    sorted_file = os.path.join(output_dir, 'sorted_processed_reads.bed')
+    logging.info("Sorting read end positions reads")
+    sorted_file = os.path.join(output_dir, 'sorted_processed_3prime_6nt.bed')
     sort_command = f"sort -V -k1,1 -k2,2n -k3,3n --parallel={os.cpu_count()} -S 80% -T {output_dir} {processed_file} > {sorted_file}"
 
     try:
@@ -117,15 +120,17 @@ def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_
 
     processed_file = sorted_file
     
-    # split the processed file into chunks
+    # split the 3' end positions into chunks for parallel processing
     temp_bed_chunks = split_bed_file(processed_file, output_dir, num_chunks)
     
+    # refer to exon, intron and dog files to assign gene positions 
     feature_files = {
         "exon": exon_bed_file,
         "intron": intron_bed_file,
         "dog": dog_bed_file
     }
     
+    # use multiprocessing to intersect the read end positions against exons, introns and DOG regions 
     with ThreadPoolExecutor(max_workers=num_chunks) as executor:
         future_to_chunk = {executor.submit(intersect_and_process_chunk, chunk, feature_files, genome_file, output_dir, gene_id_map, min_overlap): chunk for chunk in temp_bed_chunks}
         chunk_results = []
