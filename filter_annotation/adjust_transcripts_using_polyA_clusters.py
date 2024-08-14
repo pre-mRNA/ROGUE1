@@ -151,12 +151,14 @@ def adjust_regions_for_gene(gene_id, exon_df, intron_df, gene_df, cluster, chrom
     
     # if no cluster is found, keep the original gene structure
     if cluster is None:
-        exons_to_keep = gene_exons
-        introns_to_keep = gene_introns
-        new_dog = pd.DataFrame()
-        new_gene_entry = gene_entry
-        error_message = "No cluster provided"
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame([gene_entry]), pd.DataFrame(), error_message
+
+        # create new DOG region for the original gene
+        original_dog = create_initial_dog(gene_entry, gene_entry['end'] if gene_entry['strand'] == '+' else gene_entry['start'])
+        original_dog = adjust_for_genome_boundaries(original_dog, chrom_lengths)
+        numbered_exons, numbered_introns = number_exons_and_introns(gene_exons, gene_introns, gene_id, gene_entry['strand'])
+        
+        return numbered_exons, numbered_introns, original_dog, pd.DataFrame([gene_entry]), pd.DataFrame(), "No cluster provided"
+
 
     # select a polyA cluster 
     pas_position = cluster['end'] if cluster['strand'] == '+' else cluster['start']
@@ -187,6 +189,7 @@ def adjust_regions_for_gene(gene_id, exon_df, intron_df, gene_df, cluster, chrom
     spanning_intron = introns_to_keep[(introns_to_keep['start'] < pas_position) & (introns_to_keep['end'] > pas_position)]
 
     if not spanning_intron.empty:
+        
         # delete introns that span the pas 
         introns_to_keep = introns_to_keep[introns_to_keep.index != spanning_intron.index[0]]
 
@@ -323,12 +326,19 @@ def process_gene_chunk(chunk_data):
             else:  
                 cluster = min(valid_clusters, key=lambda x: x['start'])
         
+        # adjust the gene annotation to use the most downstream polyA cluster as the TES 
         exon, intron, dog, gene, cluster_data, error_message = adjust_regions_for_gene(gene_id, exon_df, intron_df, gene_df, cluster, chrom_lengths)
+        
+        # append exons and introns even if gene is not adjusted
         chunk_exons.append(exon)
         chunk_introns.append(intron)
         chunk_dogs.append(dog)
         chunk_genes.append(gene)
-        chunk_clusters.append(cluster_data)
+        
+        # but only append cluster data if a poly(A) cluster was used
+        if cluster is not None:
+            chunk_clusters.append(cluster_data)
+        
         if error_message:
             discordant_pas.append(error_message)
         
@@ -340,7 +350,7 @@ def process_gene_chunk(chunk_data):
         pd.concat(chunk_introns, ignore_index=True),
         pd.concat(chunk_dogs, ignore_index=True),
         pd.concat(chunk_genes, ignore_index=True),
-        pd.concat(chunk_clusters, ignore_index=True),
+        pd.concat(chunk_clusters, ignore_index=True) if chunk_clusters else pd.DataFrame(),
         discordant_pas,
         dict(cross_chromosome_clusters),
         genes_without_valid_clusters
