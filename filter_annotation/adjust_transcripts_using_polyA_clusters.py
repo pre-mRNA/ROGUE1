@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
 from collections import defaultdict
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def read_bed(file_path):
     df = pd.read_csv(file_path, sep='\t', header=None, 
@@ -29,11 +29,14 @@ def read_fasta_index(fai_path):
     return fai_df.set_index('chrom')['length'].to_dict()
 
 def find_downstream_positions(clusters_df, gene_df):
+
+    # start with post-transcriptional cluster 
     post_trans_clusters = clusters_df[clusters_df['category'] == 'post_transcriptional']
     gene_info = gene_df.set_index('gene_id')[['chrom', 'start', 'end', 'strand']]
     
     downstream_positions = {}
     
+    # don't return genes that don't have polyA clusters 
     for gene_id, group in post_trans_clusters.groupby('gene_id'):
         if gene_id not in gene_info.index:
             continue
@@ -42,6 +45,7 @@ def find_downstream_positions(clusters_df, gene_df):
         
         valid_clusters = group[group['strand'] == gene_strand]
         
+        # only considers clusters downstream of the TSS 
         if gene_strand == '+':
             valid_clusters = valid_clusters[valid_clusters['start'] >= gene_start]
         else:  
@@ -50,6 +54,7 @@ def find_downstream_positions(clusters_df, gene_df):
         if not valid_clusters.empty:
             downstream_positions[gene_id] = valid_clusters.to_dict('records')
     
+    # return the clusters 
     return downstream_positions
 
 def number_exons_and_introns(exons, introns, gene_id, strand):
@@ -139,10 +144,12 @@ def adjust_for_genome_boundaries(dog, chrom_lengths):
     return dog[dog['start'] < dog['end']]  
 
 def adjust_regions_for_gene(gene_id, exon_df, intron_df, gene_df, cluster, chrom_lengths):
+
     gene_exons = exon_df[exon_df['gene_id'] == gene_id].sort_values('start')
     gene_introns = intron_df[intron_df['gene_id'] == gene_id].sort_values('start')
     gene_entry = gene_df[gene_df['gene_id'] == gene_id].iloc[0]
     
+    # if no cluster is found, keep the original gene structure
     if cluster is None:
         exons_to_keep = gene_exons
         introns_to_keep = gene_introns
@@ -151,32 +158,126 @@ def adjust_regions_for_gene(gene_id, exon_df, intron_df, gene_df, cluster, chrom
         error_message = "No cluster provided"
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame([gene_entry]), pd.DataFrame(), error_message
 
+    # select a polyA cluster 
     pas_position = cluster['end'] if cluster['strand'] == '+' else cluster['start']
     
+    # discard genes where the most downstream cluster is before the gene start
     if (cluster['strand'] == '+' and pas_position < gene_entry['start']) or \
        (cluster['strand'] == '-' and pas_position > gene_entry['end']):
         error_message = f"PAS position {pas_position} is {'before' if cluster['strand'] == '+' else 'after'} gene {'start' if cluster['strand'] == '+' else 'end'} {gene_entry['start' if cluster['strand'] == '+' else 'end']} for gene {gene_id}"
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame([gene_entry]), pd.DataFrame([cluster]), error_message
 
-    # adjust exons and introns based on PAS position
-    affected_exons = gene_exons[(gene_exons['start'] <= pas_position) & (gene_exons['end'] >= pas_position)]
-    affected_exons_indices = affected_exons.index
-    if cluster['strand'] == '+':
-        gene_exons.loc[affected_exons_indices, 'end'] = pas_position
-        exons_to_keep = gene_exons[gene_exons['end'] <= pas_position]
-        introns_to_keep = gene_introns[gene_introns['end'] < pas_position]
-    else:
-        gene_exons.loc[affected_exons_indices, 'start'] = pas_position
-        exons_to_keep = gene_exons[gene_exons['start'] >= pas_position]
-        introns_to_keep = gene_introns[gene_introns['start'] > pas_position]
-
+    # trim or extend the gene to the new PAS
     new_gene_entry = gene_entry.copy()
-    new_gene_entry['end'] = pas_position if cluster['strand'] == '+' else gene_entry['end']
-    new_gene_entry['start'] = gene_entry['start'] if cluster['strand'] == '+' else pas_position
+    if cluster['strand'] == '+':
+        new_gene_entry['end'] = pas_position
+    else:
+        new_gene_entry['start'] = pas_position
+
+    # delete all exons and introns that are fully downstream of the PAS
+    if cluster['strand'] == '+':
+        exons_to_keep = gene_exons[gene_exons['start'] < pas_position]
+        introns_to_keep = gene_introns[gene_introns['start'] < pas_position]
+    else:
+        exons_to_keep = gene_exons[gene_exons['end'] > pas_position]
+        introns_to_keep = gene_introns[gene_introns['end'] > pas_position]
+
+    # handle exons or intron that span the PAS
+    spanning_exon = exons_to_keep[(exons_to_keep['start'] < pas_position) & (exons_to_keep['end'] > pas_position)]
+    spanning_intron = introns_to_keep[(introns_to_keep['start'] < pas_position) & (introns_to_keep['end'] > pas_position)]
+
+    if not spanning_intron.empty:
+        # delete introns that span the pas 
+        introns_to_keep = introns_to_keep[introns_to_keep.index != spanning_intron.index[0]]
+
+        # extend the last exon if it's upstream of the PAS
+        if cluster['strand'] == '+':
+            last_exon = exons_to_keep.iloc[-1]
+            if last_exon['end'] < pas_position:
+                exons_to_keep.loc[last_exon.name, 'end'] = pas_position
+        else:
+            print("adjusting first exon on negative strand")
+            first_exon = exons_to_keep.iloc[0]
+            print(f"Before adjusting: {first_exon['start']}")
+            print(f"Target PAS: {pas_position}")
+            if first_exon['start'] > pas_position:
+                exons_to_keep.loc[first_exon.name, 'start'] = pas_position 
+                print(f"After adjusting: {first_exon['start']}")
+
+    elif not spanning_exon.empty:
+        # trim the exon that spans the PAS
+        if cluster['strand'] == '+':
+            exons_to_keep.loc[spanning_exon.index[0], 'end'] = pas_position 
+        else:
+            exons_to_keep.loc[spanning_exon.index[0], 'start'] = pas_position 
+
+    else:
+        # extend the last exon if it's upstream of the PAS
+        if cluster['strand'] == '+':
+            last_exon = exons_to_keep.iloc[-1]
+            if last_exon['end'] < pas_position:
+                exons_to_keep.loc[last_exon.name, 'end'] = pas_position
+        else:
+
+            print("adjusting first exon on negative strand")
+            first_exon = exons_to_keep.iloc[0]
+            print(f"Before adjusting: {first_exon['start']}")
+            print(f"Target PAS: {pas_position}")
+            if first_exon['start'] > pas_position:
+                exons_to_keep.loc[first_exon.name, 'start'] = pas_position 
+                print(f"After adjusting: {first_exon['start']}")
+
+
+    ## quality checks 
+    # check if adjusted gene is continuous
+    total_exon_intron_length = (exons_to_keep['end'] - exons_to_keep['start']).sum() + \
+                               (introns_to_keep['end'] - introns_to_keep['start']).sum()
+    adjusted_gene_length = new_gene_entry['end'] - new_gene_entry['start']
+
+    ## detailed logging for debug 
+    # logging.debug(f"Gene {gene_id} adjustment:")
+    # logging.debug(f"Original gene length: {gene_entry['end'] - gene_entry['start']}")
+    # logging.debug(f"PAS position: {pas_position}")
+    # logging.debug(f"Exons to keep: {exons_to_keep}")
+    # logging.debug(f"Introns to keep: {introns_to_keep}")
+    # logging.debug(f"New gene entry: {new_gene_entry}")
+    # logging.debug(f"Total exon length: {(exons_to_keep['end'] - exons_to_keep['start']).sum()}")
+    # logging.debug(f"Total intron length: {(introns_to_keep['end'] - introns_to_keep['start']).sum()}")
+    # logging.debug(f"Adjusted gene length: {adjusted_gene_length}")
+
+    # check if the exon and intron length doesn't equal gene length 
+    if total_exon_intron_length != adjusted_gene_length:
+        
+        print("ERROR_CASE")
+        print("ERROR_CASE")
+        print("ERROR_CASE")
+        print("ERROR_CASE")
+        print("ERROR_CASE")
+
+        # extra debuggig information for these cases 
+        logging.debug(f"Original gene: start={gene_entry['start']}, end={gene_entry['end']}, length={gene_entry['end'] - gene_entry['start']}")
+        logging.debug(f"PAS position: {pas_position}")
+        logging.debug(f"Strand: {cluster['strand']}")
+        logging.debug(f"Exons to keep before adjustment:\n{exons_to_keep}")
+        logging.debug(f"Introns to keep before adjustment:\n{introns_to_keep}")
+        logging.debug(f"Exons to keep after adjustment:\n{exons_to_keep}")
+        logging.debug(f"Introns to keep after adjustment:\n{introns_to_keep}")
+        logging.debug(f"New gene entry: start={new_gene_entry['start']}, end={new_gene_entry['end']}, length={new_gene_entry['end'] - new_gene_entry['start']}")
+        
+        raise ValueError(f"Adjusted gene {gene_id} is not continuous. "
+                         f"Exon+Intron length ({total_exon_intron_length}) != Gene length ({adjusted_gene_length})")
 
     # create DOG regions from scratch and adjust for genome boundaries
     new_dog = create_initial_dog(new_gene_entry, pas_position)
     new_dog = adjust_for_genome_boundaries(new_dog, chrom_lengths)
+
+    # Check if DOG region is adjacent and downstream of the gene
+    if cluster['strand'] == '+':
+        if new_dog['start'].iloc[0] != new_gene_entry['end']:
+            raise ValueError(f"DOG region for gene {gene_id} (+ strand) is not adjacent to gene end")
+    else:
+        if new_dog['end'].iloc[0] != new_gene_entry['start']:
+            raise ValueError(f"DOG region for gene {gene_id} (- strand) is not adjacent to gene start")
 
     numbered_exons, numbered_introns = number_exons_and_introns(exons_to_keep, introns_to_keep, gene_id, new_gene_entry['strand'])
 
@@ -191,7 +292,6 @@ def adjust_regions_for_gene(gene_id, exon_df, intron_df, gene_df, cluster, chrom
             error_message = "DOG is not adjacent to PAS for gene " + gene_id + " (" + ('positive' if cluster['strand'] == '+' else 'negative') + " strand)"
 
     return numbered_exons, numbered_introns, new_dog, pd.DataFrame([new_gene_entry]), pd.DataFrame([cluster]), error_message
-
 
 def process_gene_chunk(chunk_data):
     exon_df, intron_df, gene_df, downstream_positions_dict, chrom_lengths, gene_ids_chunk = chunk_data
@@ -219,7 +319,7 @@ def process_gene_chunk(chunk_data):
         cluster = None
         if valid_clusters:
             if gene_strand == '+':
-                cluster = max(valid_clusters, key=lambda x: x['end'])
+                cluster = max(valid_clusters, key=lambda x: x['end']) # take the most downstream cluster for each gene
             else:  
                 cluster = min(valid_clusters, key=lambda x: x['start'])
         
@@ -257,14 +357,21 @@ def main():
     parser.add_argument("--cores", type=int, default=os.cpu_count(), help="Number of CPU cores to use")
     args = parser.parse_args()
 
+    # read in the first pass annotation 
     exon_df = read_bed(args.exon)
     intron_df = read_bed(args.intron)
     gene_df = read_bed(args.gene)
     clusters_df = read_clusters(args.clusters)
     chrom_lengths = read_fasta_index(args.fai)
 
+    # initial gene count 
+    initial_gene_count = len(gene_df['gene_id'].unique())
+    logging.info(f"Initial number of genes: {initial_gene_count}")
+
+    # find poly(A) clusters at the end of, or downstream of, genes
     downstream_positions_dict = find_downstream_positions(clusters_df, gene_df)
     
+    # where we don't have any downstream positions, return the original annotations 
     if not downstream_positions_dict:
         logging.warning("No valid downstream positions found. Outputting original annotations.")
         exon_df.to_csv(os.path.join(args.output_dir, 'updated_exon.bed'), sep='\t', header=False, index=False)
@@ -274,6 +381,7 @@ def main():
         pd.DataFrame(columns=['chrom', 'start', 'end', 'name', 'score', 'strand', 'distance']).to_csv(os.path.join(args.output_dir, 'PAS.bed'), sep='\t', header=False, index=False)
         return
 
+    # process chunks of genes 
     gene_ids = gene_df['gene_id'].unique()
     gene_chunks = np.array_split(gene_ids, args.cores)
     chunk_data = [(exon_df, intron_df, gene_df, downstream_positions_dict, chrom_lengths, gene_chunk) for gene_chunk in gene_chunks]
@@ -308,6 +416,47 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
+    # validate final gene count and structure
+    final_gene_count = len(final_genes['gene_id'].unique())
+    logging.info(f"Final number of genes: {final_gene_count}")
+
+    if final_gene_count != initial_gene_count:
+        logging.error(f"Gene count mismatch: Started with {initial_gene_count}, ended with {final_gene_count}")
+        raise ValueError("Gene count mismatch")
+
+    # TODO: REMOVE THIS BLOCK
+    # we now calculate structure errors in the gene code 
+    # # validate gene structure
+    # structure_errors = []
+    # for _, gene in final_genes.iterrows():
+    #     gene_id = gene['gene_id']
+    #     gene_length = gene['end'] - gene['start']
+        
+    #     gene_exons = final_exons[final_exons['gene_id'] == gene_id]
+    #     gene_introns = final_introns[final_introns['gene_id'] == gene_id]
+    #     gene_dog = final_dogs[final_dogs['gene_id'] == gene_id]
+        
+    #     exon_intron_length = (gene_exons['end'] - gene_exons['start']).sum() + (gene_introns['end'] - gene_introns['start']).sum()
+        
+    #     if exon_intron_length != gene_length:
+    #         structure_errors.append(f"Gene {gene_id}: exon+intron length ({exon_intron_length}) != gene length ({gene_length})")
+        
+    #     if not gene_dog.empty:
+    #         if gene['strand'] == '+':
+    #             if gene_dog['start'].iloc[0] != gene['end']:
+    #                 structure_errors.append(f"Gene {gene_id}: DOG region not continuous with gene end")
+    #         else:
+    #             if gene_dog['end'].iloc[0] != gene['start']:
+    #                 structure_errors.append(f"Gene {gene_id}: DOG region not continuous with gene start")
+
+    # if structure_errors:
+    #     logging.error("Gene structure errors found:")
+    #     for error in structure_errors:
+    #         logging.error(error)
+    #     raise ValueError("Gene structure errors found")
+
+    # logging.info("Gene count and structure validation passed")
+
     final_exons.to_csv(os.path.join(args.output_dir, 'updated_exon.bed'), sep='\t', header=False, index=False, 
                        columns=['chrom', 'start', 'end', 'gene_id', 'combined', 'strand'])
     final_introns.to_csv(os.path.join(args.output_dir, 'updated_intron.bed'), sep='\t', header=False, index=False, 
@@ -318,6 +467,9 @@ def main():
 
     log_file = os.path.join(args.output_dir, 'processing_log.txt')
     with open(log_file, 'w') as f:
+        f.write(f"Initial number of genes: {initial_gene_count}\n")
+        f.write(f"Final number of genes: {final_gene_count}\n\n")
+
         f.write(f"Total discordant PAS: {len(all_discordant_pas)}\n\n")
         for pas in all_discordant_pas:
             f.write(f"{pas}\n")
@@ -329,6 +481,11 @@ def main():
         f.write(f"\nTotal genes without valid clusters: {len(all_genes_without_valid_clusters)}\n")
         for gene in all_genes_without_valid_clusters:
             f.write(f"Gene without valid clusters: {gene}\n")
+
+        # if structure_errors:
+        #     f.write("\nGene structure errors:\n")
+        #     for error in structure_errors:
+        #         f.write(f"{error}\n")
 
     logging.info(f"All updated BED files have been created in the specified output directory.")
     logging.info(f"Found {len(all_discordant_pas)} genes with discordant PAS.")
