@@ -24,6 +24,16 @@ def setup_logging():
                         format='%(asctime)s - %(levelname)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
 
+def count_genes(gtf_file):
+    gene_count = 0
+    with open(gtf_file, 'r') as f:
+        for line in f:
+            if line.strip() and not line.startswith('#'):
+                fields = line.split('\t')
+                if fields[2] == 'gene':
+                    gene_count += 1
+    return gene_count
+
 def load_gtf_into_memory(gtf_file):
     logging.info("Loading GTF into memory...")
     db_file = gtf_file + ".db"
@@ -251,10 +261,10 @@ def process_scoring_chunk(args):
     gene_chunk, scoring_data = args
     chunk_best_transcripts = {}
     chunk_score_matrix = []
+    genes_with_no_reads = []
 
     for gene_id in gene_chunk:
         data = scoring_data[gene_id]
-        print(data)
         
         # calculate length bonus 
         if data['transcript_strands'][0] == '+':
@@ -265,18 +275,16 @@ def process_scoring_chunk(args):
         base_scores = data['counts'][:, 0] + data['counts'][:, 1] + 2 * data['counts'][:, 2]
         scores = base_scores + length_bonus
         
-        best_index = np.argmax(scores)
-        best_transcript = data['transcript_ids'][best_index]
-        
-        if scores[best_index] == 0:
-
-            # if no support, choose the transcript with the most upstream end (considering strand)
-            if data['transcript_strands'][0] == '+':
-                best_transcript = data['transcript_ids'][np.argmin(data['transcript_starts'])]
-            else:
-                best_transcript = data['transcript_ids'][np.argmax(data['transcript_ends'])]
-        
-        chunk_best_transcripts[gene_id] = best_transcript
+        if np.sum(base_scores) == 0:
+            # No reads for this gene, but we still select the longest transcript
+            genes_with_no_reads.append(gene_id)
+            best_index = np.argmax(scores)  # This will be determined by length_bonus
+            best_transcript = data['transcript_ids'][best_index]
+            chunk_best_transcripts[gene_id] = best_transcript
+        else:
+            best_index = np.argmax(scores)
+            best_transcript = data['transcript_ids'][best_index]
+            chunk_best_transcripts[gene_id] = best_transcript
         
         for i, transcript_id in enumerate(data['transcript_ids']):
             chunk_score_matrix.append([
@@ -292,7 +300,7 @@ def process_scoring_chunk(args):
                 scores[i]
             ])
 
-    return chunk_best_transcripts, chunk_score_matrix
+    return chunk_best_transcripts, chunk_score_matrix, genes_with_no_reads
 
 def select_best_transcripts(support_counts, transcripts, score_matrix_file=None):
     logging.info("Selecting best transcripts...")
@@ -309,12 +317,17 @@ def select_best_transcripts(support_counts, transcripts, score_matrix_file=None)
 
     best_transcripts = {}
     score_matrix = []
-    for chunk_best_transcripts, chunk_score_matrix in results:
+    genes_with_reads = 0
+    genes_without_reads = 0
+    all_genes_with_no_reads = []
+    for chunk_best_transcripts, chunk_score_matrix, chunk_genes_with_no_reads in results:
         best_transcripts.update(chunk_best_transcripts)
         score_matrix.extend(chunk_score_matrix)
+        all_genes_with_no_reads.extend(chunk_genes_with_no_reads)
+        genes_without_reads += len(chunk_genes_with_no_reads)
+        genes_with_reads += len(chunk_best_transcripts) - len(chunk_genes_with_no_reads)
 
     if score_matrix_file:
-        
         score_matrix.sort(key=lambda x: (x[0], x[1], -x[3]))  # sort by gene, transcript, then -TES
         
         with open(score_matrix_file, 'w') as f:
@@ -324,29 +337,47 @@ def select_best_transcripts(support_counts, transcripts, score_matrix_file=None)
         
         logging.info(f"Score matrix written to {score_matrix_file}")
     
-    logging.info(f"Selected {len(best_transcripts)} best transcripts")
-    return best_transcripts
+    logging.info(f"Selected best transcripts for {genes_with_reads} genes with reads")
+    logging.info(f"Selected longest transcript for {genes_without_reads} genes without reads")
+    
+    # Write the list of genes with no reads to a file
+    no_reads_file = score_matrix_file.rsplit('.', 1)[0] + '_genes_with_no_reads.txt'
+    with open(no_reads_file, 'w') as f:
+        for gene_id in all_genes_with_no_reads:
+            f.write(f"{gene_id}\n")
+    logging.info(f"List of genes with no reads written to {no_reads_file}")
+
+    return best_transcripts, genes_with_reads, genes_without_reads
 
 def filter_gtf(gtf_file, best_transcripts, out_gtf):
     logging.info("Filtering GTF...")
     db = gffutils.FeatureDB(gtf_file + ".db")
     with open(out_gtf, 'w') as out_f:
-        for gene_id, transcript_id in tqdm(best_transcripts.items(), desc="Writing GTF"):
-            gene = db[gene_id]
-            transcript = db[transcript_id]
-            
-            # trim gene feature length 
-            gene_start = transcript.start
-            gene_end = transcript.end
-            
-            # construct attribute string 
-            gene_attrs = '; '.join([f"{k} \"{v[0]}\"" for k, v in gene.attributes.items()])
-            gene_line = f"{gene.chrom}\t{gene.source}\tgene\t{gene_start}\t{gene_end}\t.\t{gene.strand}\t.\t{gene_attrs}"
-            
-            out_f.write(gene_line + '\n')
-            out_f.write(str(transcript) + '\n')
-            for exon in db.children(transcript, featuretype='exon'):
-                out_f.write(str(exon) + '\n')
+        for gene in tqdm(db.features_of_type('gene'), desc="Writing GTF"):
+            gene_id = gene.id
+            if best_transcripts.get(gene_id) == 'all':
+                # Write all features for this gene
+                out_f.write(str(gene) + '\n')
+                for transcript in db.children(gene, featuretype='transcript'):
+                    out_f.write(str(transcript) + '\n')
+                    for exon in db.children(transcript, featuretype='exon'):
+                        out_f.write(str(exon) + '\n')
+            elif gene_id in best_transcripts:
+                transcript_id = best_transcripts[gene_id]
+                transcript = db[transcript_id]
+                
+                # trim gene feature length 
+                gene_start = transcript.start
+                gene_end = transcript.end
+                
+                # construct attribute string 
+                gene_attrs = '; '.join([f"{k} \"{v[0]}\"" for k, v in gene.attributes.items()])
+                gene_line = f"{gene.chrom}\t{gene.source}\tgene\t{gene_start}\t{gene_end}\t.\t{gene.strand}\t.\t{gene_attrs}"
+                
+                out_f.write(gene_line + '\n')
+                out_f.write(str(transcript) + '\n')
+                for exon in db.children(transcript, featuretype='exon'):
+                    out_f.write(str(exon) + '\n')
     
     logging.info(f"Filtered GTF written to {out_gtf}")
 
@@ -354,12 +385,32 @@ def main(bam_file, gtf_file, out_gtf, poly_a_threshold, score_matrix_file):
     setup_logging()
     logging.info("R1 annotation filtering initialised")
     logging.info("Starting transcript selection process")
+
+    # count number of genes in original annotation 
+    original_gene_count = count_genes(gtf_file)
+    logging.info(f"Number of genes in the original GTF: {original_gene_count}")
     
+    # load gtf using gffutils 
     genes, transcripts = load_gtf_into_memory(gtf_file)
+
+    # calculate support level for each transcript based on splice count and gene coverage 
     support_counts = parallel_process_genes(bam_file, genes, transcripts, poly_a_threshold)
-    best_transcripts = select_best_transcripts(support_counts, transcripts, score_matrix_file)
+    best_transcripts, genes_with_reads, genes_without_reads = select_best_transcripts(support_counts, transcripts, score_matrix_file)
+
+    # filter the gtf for the best transcript 
     filter_gtf(gtf_file, best_transcripts, out_gtf)
-    
+
+    # verify that we have the same number of genes after filtering 
+    filtered_gene_count = count_genes(out_gtf)
+    logging.info(f"Number of genes in the filtered GTF: {filtered_gene_count}")
+    if original_gene_count == filtered_gene_count:
+        logging.info("Gene count check passed: The number of genes before and after filtering is the same.")
+    else:
+        logging.error(f"Gene count mismatch: Original GTF had {original_gene_count} genes, but filtered GTF has {filtered_gene_count} genes.")
+        raise ValueError("The number of genes before and after filtering does not match.")
+
+    logging.info(f"Selected best transcript for {genes_with_reads} genes with reads")
+    logging.info(f"Selected longest transcript for {genes_without_reads} genes without reads")
     logging.info("Transcript selection process completed")
 
 if __name__ == "__main__":
