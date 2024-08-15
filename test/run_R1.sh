@@ -17,13 +17,17 @@ gtf="/home/150/as7425/R1/test/data/merged.gtf"
 # export bam="/home/150/as7425/R1/test/data/myc_point.bam"
 # export gtf="/home/150/as7425/R1/test/data/myc.gtf"
 
-# run R1 without index 
-time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --record_exons #> ${out_dir}/ROGUE1-log.txt 2>&1
-wc -l $output
+# # run R1 without index 
+# time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --record_exons #> ${out_dir}/ROGUE1-log.txt 2>&1
+# wc -l $output
 
 # run R1 with index 
 time python3 ~/R1/R1.py -b ${bam} -g ${gtf} -o ${output} -p -j --index ${index} --record_exons #> ${out_dir}/ROGUE1-log.txt 2>&1
 wc -l $output
+
+# annotate the BAM file 
+annotate="/home/150/as7425/R1/annotate_bam/annotate_bam_from_R1.py"
+time python3 $annotate -b ${bam} -o ${out_dir}/${bam##*/}_annotate.bam -r1_table 
 
 # classify the splicing from acceptor 
 time python3 ~/R1/classify_splicing/run_classify_splicing_from_acceptor.py ${output} "${output%.*}_classify.tsv"

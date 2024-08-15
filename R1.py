@@ -23,6 +23,9 @@ sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
 from map_mm_tag_to_genome_position import extract_modifications
 from extract_polyA_length import fetch_polyA_pt
 
+sys.path.append("/home/150/as7425/R1/classify_splicing")
+from canonical_splicing_from_acceptor import classify_splicing
+
 # set logging level 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
@@ -183,6 +186,12 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     df_biotype_expanded = pd.json_normalize(df['biotype_info'])
     df = pd.concat([df.drop('biotype_info', axis=1), df_biotype_expanded], axis=1)
     df.fillna({'biotype': 'unknown', 'gene_name': 'unknown', 'exon_count': 0}, inplace=True)
+
+    # classify canonical splicing from acceptors 
+    if record_exons:
+        logging.info("Classifying splicing status for reads...")
+        df = classify_splicing(df)
+        logging.info("Splicing classification complete.")
 
     # calculate distances between read ends and nearest transcript end sites 
     transcript_ends = get_transcript_ends(gtf_file, output_dir)
