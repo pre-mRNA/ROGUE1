@@ -15,8 +15,9 @@ def get_transcript_ends(gtf_file, output_dir):
     
     transcript_end_coordinates = pd.read_csv(
         bed_file, sep='\t', header=None,
-        names=['chromosome', 'position', 'end_position', 'transcript_id', 'gene_id', 'strand']
-    ).astype({'position': 'int32', 'end_position': 'int32'})
+        names=['chromosome', 'position', 'end_position', 'transcript_id', 'gene_id', 'strand'],
+        dtype={'chromosome': str, 'position': 'int64', 'end_position': 'int64', 'transcript_id': str, 'gene_id': str, 'strand': str}
+    )
 
     logging.info(f"Extracted {len(transcript_end_coordinates)} features from BED file.")
 
@@ -38,7 +39,7 @@ def calculate_distance_for_unique_positions(unique_positions: pd.DataFrame, tran
             transcript_end_coordinates['strand'] == ('+' if strand_sign == 1 else '-'), :
         ].copy()
         transcript_end_coordinates_chunk.loc[:, 'read_end_chromosome'] = transcript_end_coordinates_chunk['chromosome'].astype(str)
-        transcript_end_coordinates_chunk.loc[:, 'position'] = transcript_end_coordinates_chunk['position'].astype('int64')
+        # transcript_end_coordinates_chunk.loc[:, 'position'] = transcript_end_coordinates_chunk['position'].astype('int64')
 
         # logging.info("TES chunk head")
         # print(transcript_end_coordinates_chunk.head())

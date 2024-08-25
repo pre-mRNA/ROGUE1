@@ -133,16 +133,17 @@ def filter_junctions(df, overlap_threshold=0.60, frequency_threshold=0.002, num_
     grouped = df.groupby(['Chromosome', 'Strand', 'Gene_ID'])
     print("Number of groups:", grouped.ngroups)
 
-    filtered_df = pd.DataFrame()
+    filtered_df_list = []
 
     for name, group in grouped:
         total_counts = group['Counts'].sum()
         group['Relative_Frequency'] = group['Counts'] / total_counts if total_counts > 0 else 0
         
         # filter by relative frequency 
-        filtered_df = filtered_df.append(group[group['Relative_Frequency'] > frequency_threshold])
+        filtered_df_list.append(group[group['Relative_Frequency'] > frequency_threshold])
 
-    filtered_df.reset_index(drop=True, inplace=True)
+    # concatenate all filtered groups into a single DataFrame
+    filtered_df = pd.concat(filtered_df_list, ignore_index=True)
 
     # report on intial filtering 
     filtered_count = len(filtered_df)

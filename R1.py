@@ -11,20 +11,16 @@ import shutil
 # function imports 
 sys.path.append("/home/150/as7425/R1/read_classifier/")
 from process_genome import generate_genome_file, read_chromosomes_from_genome_file, filter_bed_by_chromosome_inplace
-from gtf_to_bed import gtf_to_bed, extend_gene_bed, sort_bed_file, number_exons_and_introns_in_bed
+from gtf_to_bed import gtf_to_bed, extend_gene_bed, sort_bed_file
 from intersect import run_bedtools
 from parse_intersect import parse_output
 from process_read_end_positions import calculate_distance_to_read_ends, get_transcript_ends
-from fetch_read_end_feature import get_end_feature
 from process_gtf import get_biotypes 
 from extract_junctions import parallel_extract_splice_junctions, summarize_junctions, filter_junctions, process_intron_to_junctions
 
 sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
 from map_mm_tag_to_genome_position import extract_modifications
 from extract_polyA_length import fetch_polyA_pt
-
-sys.path.append("/home/150/as7425/R1/classify_splicing")
-from canonical_splicing_from_acceptor import classify_splicing
 
 # set logging level 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
@@ -81,18 +77,10 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
             logging.warning("Some required files are missing in the index path. Creating new index files.")
             index_path = None
 
-    # create an index on the fly 
     if not index_path:
         gene_bed = gtf_to_bed(gtf_file, "gene", output_dir)
-        
-        unsorted_exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
-        exon_bed = os.path.join(output_dir, 'numbered_exon.bed')
-        number_exons_and_introns_in_bed(unsorted_exon_bed, exon_bed, 'exon') # add exon numbers to bed col5
-
-        unsorted_intron_bed = gtf_to_bed(gtf_file, "intron", output_dir)
-        intron_bed = os.path.join(output_dir, 'numbered_intron.bed')
-        number_exons_and_introns_in_bed(unsorted_intron_bed, intron_bed, 'intron') # add exon numbers to bed col5
-
+        exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
+        intron_bed = gtf_to_bed(gtf_file, "intron", output_dir)
         dog_bed = extend_gene_bed(gene_bed, output_dir, genome_file)
 
         # filter annotations for relevant chromosomes 
@@ -109,15 +97,10 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
                       num_files=104, original_exon_bed=exon_bed, original_intron_bed=intron_bed, 
                       original_dog_bed=dog_bed)
     
+    logging.info(f"Processed overlaps for {len(df)} reads")
+    
     # store a dict of read_id and gene_id 
     gene_id_map = df.set_index('read_id')['gene_id'].to_dict()
-
-    # get read end feature 
-    end_features = get_end_feature(intersect_files[6], genome_file, output_dir, dog_bed, exon_bed, intron_bed, gene_id_map)
-
-    df = pd.merge(df, end_features, on=['read_id', 'gene_id'], how='left')
-    df.rename(columns={'feature': 'three_prime_feature'}, inplace=True)
-    df = df[[c for c in df.columns if c != 'three_prime_feature'][:df.columns.get_loc('read_end_strand')+1] + ['three_prime_feature'] + [c for c in df.columns if c != 'three_prime_feature'][df.columns.get_loc('read_end_strand')+1:]]
 
     # extract and merge the modifications if mods are calculated 
     if calculate_modifications:
@@ -186,12 +169,6 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     df_biotype_expanded = pd.json_normalize(df['biotype_info'])
     df = pd.concat([df.drop('biotype_info', axis=1), df_biotype_expanded], axis=1)
     df.fillna({'biotype': 'unknown', 'gene_name': 'unknown', 'exon_count': 0}, inplace=True)
-
-    # classify canonical splicing from acceptors 
-    if record_exons:
-        logging.info("Classifying splicing status for reads...")
-        df = classify_splicing(df)
-        logging.info("Splicing classification complete.")
 
     # calculate distances between read ends and nearest transcript end sites 
     transcript_ends = get_transcript_ends(gtf_file, output_dir)

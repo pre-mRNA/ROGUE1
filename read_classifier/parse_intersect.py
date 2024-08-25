@@ -62,11 +62,24 @@ def process_chunk(chunk_data, overlap_threshold):
     top_gene = {read_id: assign_gene(data) for read_id, data in read_data.items()}
     top_gene = {k: v for k, v in top_gene.items() if v is not None}
 
-    exon_overlap_group = process_overlap_group(exon_df[exon_df.apply(lambda row: top_gene.get(row['read_id']) == row['exon_gene_id'], axis=1)], ['read_id', 'exon_gene_id'], 'exon_base_overlap')
-    intron_overlap_group = process_overlap_group(intron_df[intron_df.apply(lambda row: top_gene.get(row['read_id']) == row['intron_gene_id'], axis=1)], ['read_id', 'intron_gene_id'], 'intron_base_overlap')
-    gene_overlap_group = process_overlap_group(gene_df[gene_df.apply(lambda row: top_gene.get(row['read_id']) == row['gene_id'], axis=1)], ['read_id', 'gene_id'], 'gene_base_overlap')
-    dog_overlap_group = process_overlap_group(dog_df[dog_df.apply(lambda row: top_gene.get(row['read_id']) == row['dog_gene_id'], axis=1)], ['read_id', 'dog_gene_id'], 'dog_base_overlap')
+    # initialise overlap groups 
+    exon_overlap_group = pd.DataFrame(columns=['read_id', 'exon_gene_id', 'exon_base_overlap'])
+    intron_overlap_group = pd.DataFrame(columns=['read_id', 'intron_gene_id', 'intron_base_overlap'])
+    gene_overlap_group = pd.DataFrame(columns=['read_id', 'gene_id', 'gene_base_overlap'])
+    dog_overlap_group = pd.DataFrame(columns=['read_id', 'dog_gene_id', 'dog_base_overlap'])
+
+    if not exon_df.empty:
+        exon_overlap_group = process_overlap_group(exon_df[exon_df.apply(lambda row: top_gene.get(row['read_id']) == row['exon_gene_id'], axis=1)], ['read_id', 'exon_gene_id'], 'exon_base_overlap')
+
+    if not intron_df.empty:
+        intron_overlap_group = process_overlap_group(intron_df[intron_df.apply(lambda row: top_gene.get(row['read_id']) == row['intron_gene_id'], axis=1)], ['read_id', 'intron_gene_id'], 'intron_base_overlap')
     
+    if not gene_df.empty:
+        gene_overlap_group = process_overlap_group(gene_df[gene_df.apply(lambda row: top_gene.get(row['read_id']) == row['gene_id'], axis=1)], ['read_id', 'gene_id'], 'gene_base_overlap')
+    
+    if not dog_df.empty:
+        dog_overlap_group = process_overlap_group(dog_df[dog_df.apply(lambda row: top_gene.get(row['read_id']) == row['dog_gene_id'], axis=1)], ['read_id', 'dog_gene_id'], 'dog_base_overlap')
+
     exon_filtered_summed = filter_and_sum_overlaps(exon_df, 'exon', overlap_threshold)
     intron_filtered_summed = filter_and_sum_overlaps(intron_df, 'intron', overlap_threshold)
 
@@ -74,13 +87,14 @@ def process_chunk(chunk_data, overlap_threshold):
     gene_overlap_sum = reduce(lambda left, right: pd.merge(left, right, on='read_id', how='outer'), all_overlap_groups)
 
     overlap_columns = ['exon_base_overlap', 'intron_base_overlap', 'gene_base_overlap', 'dog_base_overlap']
-    gene_overlap_sum[overlap_columns] = gene_overlap_sum[overlap_columns].fillna(0)
+    gene_overlap_sum.loc[:, overlap_columns] = gene_overlap_sum.loc[:, overlap_columns].infer_objects(copy = False)
 
     gene_overlap_sum['gene_id'] = gene_overlap_sum.apply(lambda row: top_gene.get(row['read_id'], np.nan), axis=1)
 
     return gene_overlap_sum, exon_filtered_summed, intron_filtered_summed
 
 def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_overlap_file, bed_file, end_coordinates, record_exons, genome_file, output_dir, num_files, original_exon_bed, original_intron_bed, original_dog_bed, overlap_threshold=7):
+    
     missing_files = []
     empty_files = []
     for file in [exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_overlap_file]:
@@ -100,9 +114,12 @@ def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_
     dog_cols = ['read_chrom', 'read_fragment_start', 'read_fragment_end', 'read_id', 'read-alignment_length', 'read_strand', 'dog_chrom', 'dog_start', 'dog_end', 'dog_gene_id', 'dog_id', 'dog_strand', 'dog_base_overlap']
     bam_to_bed_cols = ['chrom', 'start', 'end', 'name', 's-a_length', 'strand']
 
-    # read all files into memory 
-    # warning 
-    # this can require a lot of memory 
+
+    # read in all alignments 
+    bam_df = pd.read_csv(bed_file, sep="\t", header=None, names=bam_to_bed_cols, low_memory=False)
+    bam_df.rename(columns={'name': 'read_id', 's-a_length': 'read-alignment_length'}, inplace=True)
+    
+    # read in the overlaps 
     exon_df = pd.read_csv(exon_overlap_file, sep="\t", header=None, names=exon_cols, low_memory=False)
     intron_df = pd.read_csv(intron_overlap_file, sep="\t", header=None, names=intron_cols, low_memory=False)
     gene_df = pd.read_csv(gene_overlap_file, sep="\t", header=None, names=gene_cols, low_memory=False)
@@ -143,6 +160,7 @@ def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_
     bam_df.rename(columns={'name': 'read_id', 's-a_length': 'read-alignment_length'}, inplace=True)
     bam_df = bam_df.drop_duplicates(subset='read_id')
     gene_overlap_sum = pd.merge(bam_df[['read_id', 'read-alignment_length']], gene_overlap_sum, how='left', on='read_id')
+
 
     # read lengths, alignment lengths, splice counts
     gene_overlap_sum[['read_length', 'alignment_length', 'splice_count']] = gene_overlap_sum['read-alignment_length'].str.split(',', expand=True)

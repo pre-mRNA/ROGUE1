@@ -29,9 +29,9 @@ def gtf_to_bed(gtf_file, feature_type, output_dir):
         gene_bed = gtf_to_bed(gtf_file, "gene", output_dir)
         exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
         cmd = f"""
-        bedtools subtract -s -a <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {gene_bed} | sort -k1,1 -k2,2n) \
-        -b <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {exon_bed} | sort -k1,1 -k2,2n) | \
-        awk 'BEGIN{{FS=OFS="\\t"}} {{split($1, a, ";"); $1=a[1]; print}}' > {bed_file}
+        bedtools subtract -s -a <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {gene_bed} | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G) \
+        -b <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {exon_bed} | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G) | \
+        awk 'BEGIN{{FS=OFS="\\t"}} {{split($1, a, ";"); $1=a[1]; print}}' | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G > {bed_file}
         """
     else:
             raise ValueError(f"Unknown feature type: {feature_type}. Valid options are 'gene', 'exon', and 'transcript'.")
@@ -71,8 +71,7 @@ def number_exons_and_introns_in_bed(input_bed, output_bed, feature_type):
 def extend_gene_bed(gene_bed_file, output_dir, genome_file, extend_bases=500):
     extended_bed = NamedTemporaryFile(dir=output_dir, delete=False, suffix="_extendedGene.bed").name
 
-    genome = pd.read_csv(genome_file, sep="\t", header=None, index_col=0, squeeze=True).to_dict()
-
+    genome = pd.read_csv(genome_file, sep="\t", header=None, index_col=0).squeeze().to_dict() if pd.read_csv(genome_file, sep="\t", header=None, index_col=0).shape[1] == 1 else pd.read_csv(genome_file, sep="\t", header=None, index_col=0).to_dict()
     # use gene bed file 
     df = pd.read_csv(gene_bed_file, sep="\t", header=None)
 
