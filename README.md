@@ -1,5 +1,25 @@
 # ROGUE1
-Single-molecule integration, classification and quantification of splicing, transcription, and RNA modification data from long-read sequencing 
+
+ROGUE1 performs single-molecule integration, classification and quantification of splicing, transcription, and RNA modification data from long-read sequencing data. 
+
+# Quick-start guide 
+
+```
+
+# map long reads to genome and retain primary mappings 
+minimap2 -a -x splice "${reference.fa}" "${reads.fq}" > ./alignments.sam
+samtools view -b -F 260 ./alignments.sam | samtools sort > ./primary.bam
+samtools index primary.bam 
+
+# run ROGUE1 in 1st pass-mode 
+python3 ./R1/R1.py integrate -b $primary.bam -g ${annotation.gtf} -o ./R1_table.tsv
+
+# refine transcript models from multiple R1 results
+python3 ./R1/R1.py refine-annotation 
+
+
+
+```
 
 # File Structure
 TODO: update file structure 
