@@ -6,6 +6,9 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 from functools import reduce
+import logging 
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 def process_overlap_group(df, group_cols, value_col):
     return df.groupby(group_cols)[value_col].sum().reset_index()
@@ -106,7 +109,7 @@ def parse_output(exon_overlap_file, intron_overlap_file, gene_overlap_file, dog_
     if missing_files:
         raise Exception(f"Essential file(s) do not exist: {', '.join(missing_files)}. Unable to proceed.")
     if empty_files:
-        warnings.warn(f"Warning: The following file(s) are empty. Some data may not be processed: {', '.join(empty_files)}")
+        logging.warning(f"The following file(s) are empty and will be skipped: {', '.join(empty_files)}")
 
     exon_cols = ['read_chrom', 'read_fragment_start', 'read_fragment_end', 'read_id', 'read-alignment_length', 'read_strand', 'exon_chrom', 'exon_start', 'exon_end', 'exon_gene_id', 'exon_id', 'exon_strand', 'exon_base_overlap']
     intron_cols = ['read_chrom', 'read_fragment_start', 'read_fragment_end', 'read_id', 'read-alignment_length', 'read_strand', 'intron_chrom', 'intron_start', 'intron_end', 'intron_gene_id', 'intron_id', 'intron_strand', 'intron_base_overlap']

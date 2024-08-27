@@ -53,6 +53,9 @@ def intersect_and_process_chunk(bed_chunk, feature_files, genome_file, output_di
         cmd = f"bedtools intersect -a {bed_chunk} -b {feature_file} -wo -s -sorted -g {genome_file} > {intersect_file}"
         subprocess.run(cmd, shell=True, check=True)
         
+        if os.stat(intersect_file).st_size == 0:
+            continue
+    
         with open(intersect_file, 'r') as f:
             for line in f:
                 fields = line.strip().split('\t')
@@ -150,18 +153,17 @@ def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_
                     else:
                         merged_results[read_id][feature] += overlap
 
-    # retain the best feature per read_id based on maximum overlap
     final_data = []
-    for read_id, features in merged_results.items():
+    for read_id in gene_id_map.keys():  # Iterate through all reads
+        features = merged_results.get(read_id, {})
         if features:
             best_feature = max(features.items(), key=lambda x: x[1])
             final_data.append({'read_id': read_id, 'gene_id': gene_id_map[read_id], 'feature': best_feature[0]})
+        else:
+            final_data.append({'read_id': read_id, 'gene_id': gene_id_map[read_id], 'feature': 'unclassified'})
 
     df = pd.DataFrame(final_data)
-    if not df.empty:
-        df.set_index('read_id', inplace=True)
-        logging.info(f"DataFrame created with {len(df)} rows, indexed by read_id.")
-    else:
-        logging.warning("No valid data processed into DataFrame; DataFrame is empty.")
+    df.set_index('read_id', inplace=True)
+    logging.info(f"DataFrame created with {len(df)} rows, indexed by read_id.")
 
     return df
