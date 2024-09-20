@@ -17,8 +17,8 @@ from parse_intersect import parse_output
 from process_read_end_positions import calculate_distance_to_read_ends, get_transcript_ends
 from fetch_read_end_feature import get_end_feature
 from process_gtf import get_biotypes 
-from extract_junctions import parallel_extract_splice_junctions, summarize_junctions, filter_junctions, process_intron_to_junctions
-from polyA_deviation import calculate_polya_zscores 
+from extract_junctions import parallel_extract_splice_junctions, summarize_junctions, filter_junctions, process_intron_to_junctions 
+from polyA_z_score import classify_polya_reads
 
 sys.path.append("/home/150/as7425/R1/parse_modifications_data/")
 from map_mm_tag_to_genome_position import extract_modifications
@@ -62,7 +62,7 @@ def load_index_files(index_path, temp_dir):
     else:
         return None, None, None, None, None
 
-def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA, junction_distance, index_path, record_exons):
+def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_polyA, junction_distance, index_path, record_exons, co_threshold, post_threshold):
     output_dir = os.path.dirname(output_table) 
 
     if not os.path.exists(output_dir):
@@ -214,12 +214,13 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
         df = classify_splicing(df)
         logging.info("Splicing classification complete.")
 
-    # calculate polyA z-scores after assigning biotypes 
-    df = calculate_polya_zscores(df)
-
     # calculate distances between read ends and nearest transcript end sites 
     transcript_ends = get_transcript_ends(gtf_file, output_dir)
     end_position_df = calculate_distance_to_read_ends(df, transcript_ends, "polyA")
+
+    # classify reads based on Poly(A) lengths
+    if calculate_polyA:
+        end_position_df = classify_polya_reads(end_position_df, output_dir, co_threshold, post_threshold)
 
     # save the output as CSV 
     end_position_df.to_csv(output_table, sep="\t", index=False)
@@ -253,8 +254,10 @@ if __name__ == "__main__":
     parser.add_argument('-j', '--junction_distance', action='store_true', help='Calculate distance between read 3 prime end and splice donors.')
     parser.add_argument('--index', type=str, help='Path to the index directory containing pre-computed BED files')
     parser.add_argument('--record_exons', action='store_true', help='Record the IDs of exons and introns that each read overlaps')
+    parser.add_argument('--co_threshold', type=float, default=1.6, help='Z-score threshold for co-transcriptional classification.')
+    parser.add_argument('--post_threshold', type=float, default=1.9, help='Z-score threshold for post-transcriptional classification.')
 
     args = parser.parse_args()
     
-    main(args.bam_file, args.gtf_file, args.output_table, args.modifications, args.polyA, args.junction_distance, args.index, args.record_exons)
+    main(args.bam_file, args.gtf_file, args.output_table, args.modifications, args.polyA, args.junction_distance, args.index, args.record_exons, args.co_threshold, args.post_threshold)
 
