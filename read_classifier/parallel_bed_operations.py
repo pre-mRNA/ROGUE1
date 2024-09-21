@@ -39,7 +39,7 @@ def write_sorted_chunk(chunk, output_dir, index):
     # Open the sorted file in write mode
     with open(sorted_file, 'w', newline='') as out:
         # Start the sort process, with stdout redirected to the sorted file
-        sort_process = subprocess.Popen(['sort', '-k1,1', '-k2,2n', '--buffer-size=2G'], stdin=subprocess.PIPE, stdout=out, universal_newlines=True)
+        sort_process = subprocess.Popen(['sort', '-k1,1', '-k2,2n', '--buffer-size=12G'], stdin=subprocess.PIPE, stdout=out, universal_newlines=True)
 
         # Write the chunk data to the sort process's stdin
         for row in chunk:

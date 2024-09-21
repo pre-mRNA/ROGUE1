@@ -24,13 +24,13 @@ def run_bedtools(bam_file, genome_file, output_dir, dog_bed_file, exon_bed_file,
     with ThreadPoolExecutor(max_workers=num_files) as executor:
         tasks = []
         for bed_chunk in temp_bed_files:
-            intersect_exon_cmd = f"bedtools intersect -a {bed_chunk} -b {exon_bed_file} -wo -s -sorted -g {genome_file} | sort -k4,4 -k6,6 -k8,8nr --parallel=104 --buffer-size=80G > {bed_chunk}_exon_overlap.bed"
-            intersect_intron_cmd = f"bedtools intersect -a {bed_chunk} -b {intron_bed_file} -wo -s -sorted -g {genome_file} | sort -k4,4 -k6,6 -k8,8nr --parallel=104 --buffer-size=80G > {bed_chunk}_intron_overlap.bed"
+            intersect_exon_cmd = f"bedtools intersect -a {bed_chunk} -b {exon_bed_file} -wo -s -sorted -g {genome_file} | sort -k4,4 -k6,6 -k8,8nr --parallel=48 --buffer-size=32G > {bed_chunk}_exon_overlap.bed"
+            intersect_intron_cmd = f"bedtools intersect -a {bed_chunk} -b {intron_bed_file} -wo -s -sorted -g {genome_file} | sort -k4,4 -k6,6 -k8,8nr --parallel=48 --buffer-size=32G > {bed_chunk}_intron_overlap.bed"
             if gene_bed_file:
-                intersect_gene_cmd = f"bedtools intersect -a {bed_chunk} -b {gene_bed_file} -wo -s -sorted -g {genome_file} | sort -k4,4 -k6,6 -k8,8nr --parallel=104 --buffer-size=80G > {bed_chunk}_gene_overlap.bed"
+                intersect_gene_cmd = f"bedtools intersect -a {bed_chunk} -b {gene_bed_file} -wo -s -sorted -g {genome_file} | sort -k4,4 -k6,6 -k8,8nr --parallel=48 --buffer-size=32G > {bed_chunk}_gene_overlap.bed"
             else:
                 intersect_gene_cmd = f"touch {bed_chunk}_gene_overlap.bed"  # Create an empty file if we don't have a gene bed file
-            dog_intersect_cmd = f"bedtools intersect -a {bed_chunk} -b {dog_bed_file} -wo -s -sorted -g {genome_file} | sort -k4,4 -k6,6 -k8,8nr --parallel=104 --buffer-size=80G > {bed_chunk}_dog_overlap.bed"
+            dog_intersect_cmd = f"bedtools intersect -a {bed_chunk} -b {dog_bed_file} -wo -s -sorted -g {genome_file} | sort -k4,4 -k6,6 -k8,8nr --parallel=48 --buffer-size=32G > {bed_chunk}_dog_overlap.bed"
 
             tasks.extend([executor.submit(subprocess.run, cmd, shell=True, check=True) for cmd in [intersect_exon_cmd, intersect_intron_cmd, intersect_gene_cmd, dog_intersect_cmd]])
 
@@ -40,7 +40,7 @@ def run_bedtools(bam_file, genome_file, output_dir, dog_bed_file, exon_bed_file,
     for suffix in ["exon_overlap", "intron_overlap", "gene_overlap", "dog_overlap"]:
         output_files = [f"{bed_chunk}_{suffix}.bed" for bed_chunk in temp_bed_files]
         final_output_file = f"{bed_file}_{suffix}_final.bed"
-        cmd = "cat " + " ".join(output_files) + f" | sort -k1,1 -k2,2n -k3,3n --parallel=104 --buffer-size=80G > {final_output_file}"
+        cmd = "cat " + " ".join(output_files) + f" | sort -k1,1 -k2,2n -k3,3n --parallel=48 --buffer-size=80G > {final_output_file}"
         process = subprocess.Popen(cmd, shell=True)
         process.wait()
 

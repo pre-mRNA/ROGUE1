@@ -19,19 +19,19 @@ def gtf_to_bed(gtf_file, feature_type, output_dir):
     elif feature_type == "exon":
         # we use a complex set of commands to merge overlapping exon entries by gene, otherwise, the overlap lengths by gene(at exon level) are confounded by overlapping exons
         # inspired by https://www.biostars.org/p/469489/#469503
-        cmd = f"cat {gtf_file} |  grep -v \"intron\" | grep -v \"protein_coding_CDS_not_defined\" | awk 'OFS=\"\\t\" {{if ($3==\"exon\") {{print $1,$4-1,$5,$10,$20,$7}}}}' | tr -d '\";' | awk 'OFS=\"\\t\" {{print $4, $5, $6, $2, $3, $1}}' | sed 's/\\t/;/' | sed 's/\\t/;/' | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G | bedtools merge -i - -c 4 -o first | sed 's/;/\\t/' | sed 's/;/\\t/' | awk 'OFS=\"\\t\" {{print $6, $4, $5, $1, $2, $3}}' | sort -k1,1 -k2,2n -k3,3n --parallel=104 --buffer-size=80G > {bed_file}"
+        cmd = f"cat {gtf_file} |  grep -v \"intron\" | grep -v \"protein_coding_CDS_not_defined\" | awk 'OFS=\"\\t\" {{if ($3==\"exon\") {{print $1,$4-1,$5,$10,$20,$7}}}}' | tr -d '\";' | awk 'OFS=\"\\t\" {{print $4, $5, $6, $2, $3, $1}}' | sed 's/\\t/;/' | sed 's/\\t/;/' | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G | bedtools merge -i - -c 4 -o first | sed 's/;/\\t/' | sed 's/;/\\t/' | awk 'OFS=\"\\t\" {{print $6, $4, $5, $1, $2, $3}}' | sort -k1,1 -k2,2n -k3,3n --parallel=48 --buffer-size=32G > {bed_file}"
         logging.info("Skipping intron-contianing and protein-coding CDS not defined biotypes while parsing exons")
 
     elif feature_type == "transcript":
-        cmd = f"cat {gtf_file} | awk 'OFS=\"\\t\" {{if ($3==\"transcript\") {{print $1,$4-1,$5,$10,$18,$7}}}}' | tr -d '\";' | awk 'OFS=\"\\t\" {{if ($6==\"+\") {{print $1,$3,$3,$4,$5,$6}} else {{print $1,$2,$2,$4,$5,$6}}}}' | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G > {bed_file}"
+        cmd = f"cat {gtf_file} | awk 'OFS=\"\\t\" {{if ($3==\"transcript\") {{print $1,$4-1,$5,$10,$18,$7}}}}' | tr -d '\";' | awk 'OFS=\"\\t\" {{if ($6==\"+\") {{print $1,$3,$3,$4,$5,$6}} else {{print $1,$2,$2,$4,$5,$6}}}}' | sort -k1,1 -k2,2n --parallel=48 --buffer-size=32G > {bed_file}"
 
     elif feature_type == "intron":
         gene_bed = gtf_to_bed(gtf_file, "gene", output_dir)
         exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
         cmd = f"""
-        bedtools subtract -s -a <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {gene_bed} | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G) \
-        -b <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {exon_bed} | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G) | \
-        awk 'BEGIN{{FS=OFS="\\t"}} {{split($1, a, ";"); $1=a[1]; print}}' | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G > {bed_file}
+        bedtools subtract -s -a <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {gene_bed} | sort -k1,1 -k2,2n) \
+        -b <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {exon_bed} | sort -k1,1 -k2,2n) | \
+        awk 'BEGIN{{FS=OFS="\\t"}} {{split($1, a, ";"); $1=a[1]; print}}' > {bed_file}
         """
     else:
             raise ValueError(f"Unknown feature type: {feature_type}. Valid options are 'gene', 'exon', and 'transcript'.")
