@@ -4,7 +4,6 @@ import gffutils
 import numpy as np
 import multiprocessing as mp
 import subprocess
-import os
 import tempfile
 import logging
 from datetime import datetime
@@ -35,13 +34,13 @@ def count_genes(gtf_file):
     return gene_count
 
 def load_gtf_into_memory(gtf_file):
-    logging.info("Loading GTF into memory...")
+    logging.info("loading gtf into memory...")
     db_file = gtf_file + ".db"
     
     if not os.path.exists(db_file):
-        logging.info("GFF database not found. Creating new database...")
+        logging.info("gff database not found. creating new database...")
         gffutils.create_db(gtf_file, db_file, force=True, keep_order=True, merge_strategy='merge', sort_attribute_values=True)
-        logging.info("GFF database created successfully.")
+        logging.info("gff database created successfully.")
     
     db = gffutils.FeatureDB(db_file)
     genes = defaultdict(list)
@@ -76,7 +75,7 @@ def load_gtf_into_memory(gtf_file):
     for key in genes:
         genes[key].sort(key=lambda x: x['start'])
     
-    logging.info(f"Loaded {sum(len(g) for g in genes.values())} genes and {len(transcripts)} transcripts")
+    logging.info(f"loaded {sum(len(g) for g in genes.values())} genes and {len(transcripts)} transcripts")
     return dict(genes), transcripts
 
 def extract_splice_junctions(read, strand):
@@ -93,16 +92,16 @@ def extract_splice_junctions(read, strand):
 
 def calculate_splice_distance(read_junctions, transcript_junctions, strand):
     
-    # logging.info(f"Calculating distances for read junctions {read_junctions} on strand {strand} with transcript junctions {transcript_junctions}")
+    # logging.info(f"calculating distances for read junctions {read_junctions} on strand {strand} with transcript junctions {transcript_junctions}")
     
     def parse_junction(junction):
-        """Ensure the junction is parsed correctly, whether it's a string or already a tuple."""
+        """ensure the junction is parsed correctly, whether it's a string or already a tuple."""
         if isinstance(junction, str):
             return tuple(map(int, junction.split('-')))
         elif isinstance(junction, tuple):
             if len(junction) == 2 and all(isinstance(x, int) for x in junction):
                 return junction 
-        raise ValueError(f"Unexpected junction format: {junction}")
+        raise ValueError(f"unexpected junction format: {junction}")
 
     read_junctions = [parse_junction(rj) for rj in read_junctions]
     transcript_junctions = [parse_junction(tj) for tj in transcript_junctions]
@@ -117,17 +116,17 @@ def calculate_splice_distance(read_junctions, transcript_junctions, strand):
             closest_distance = min((abs(rj[0] - tj[0]) + abs(rj[1] - tj[1])) for tj in transcript_junctions)
             distances.append(closest_distance)
     else:
-        # logging.info(f"No transcript junctions available for comparison on strand {strand} for read junctions {read_junctions}.")
-        return float('inf'), "No transcript junctions"
+        # logging.info(f"no transcript junctions available for comparison on strand {strand} for read junctions {read_junctions}.")
+        return float('inf'), "no transcript junctions"
 
     avg_distance = np.mean(distances) if distances else float('inf')
-    reason = "Normal calculation" if distances else "No matching junctions"
+    reason = "normal calculation" if distances else "no matching junctions"
     return avg_distance, reason
 
 def process_bam_chunk(args):
-    bam_file, gene_chunk, transcripts, temp_dir, poly_a_threshold = args
+    bam_file, gene_chunk, transcripts, temp_dir, filter_column, filter_cutoff = args
     
-    # create a BED file representing the region of the gene chunk
+    # create a bed file representing the region of the gene chunk
     bed_file = os.path.join(temp_dir, f"chunk_{os.getpid()}.bed")
     with open(bed_file, 'w') as f:
         for gene in gene_chunk:
@@ -151,6 +150,16 @@ def process_bam_chunk(args):
             if read.is_unmapped or read.is_secondary or read.is_qcfail:
                 continue
             
+            # get the value of the filter column from the read
+            if read.has_tag(filter_column):
+                filter_value = read.get_tag(filter_column)
+            else:
+                filter_value = None
+            
+            # apply the cutoff
+            if filter_value is None or filter_value < filter_cutoff:
+                continue
+            
             for gene in gene_chunk:
                 if gene['end'] < read.reference_start or gene['start'] > read.reference_end:
                     continue
@@ -161,8 +170,7 @@ def process_bam_chunk(args):
                     # 3' end support (with poly-A threshold and 20 nt window)
                     if ((transcript['strand'] == '+' and abs(read.reference_end - transcript['end']) <= END_TOLERANCE) or 
                         (transcript['strand'] == '-' and abs(read.reference_start - transcript['start']) <= END_TOLERANCE)):
-                        if poly_a_threshold is None or (read.has_tag('pt') and read.get_tag('pt') >= poly_a_threshold):
-                            support_counts[gene['id']][transcript_id]['3_end'] += 1
+                        support_counts[gene['id']][transcript_id]['3_end'] += 1
                     
                     # 5' end support (with 20 nt window)
                     if ((transcript['strand'] == '+' and abs(read.reference_start - transcript['start']) <= END_TOLERANCE) or 
@@ -185,28 +193,28 @@ def process_bam_chunk(args):
                         if distance <= SPLICE_DISTANCE_THRESHOLD:
                             support_counts[gene['id']][transcript_id]['splice'] += 1
                         else:
-                            logging.debug(f"Splice mismatch - Read: {read_splice_junctions}, Transcript: {transcript_splice_junctions}, Strand: {transcript['strand']}, Distance: {distance}, Reason: {reason}")
+                            logging.debug(f"splice mismatch - read: {read_splice_junctions}, transcript: {transcript_splice_junctions}, strand: {transcript['strand']}, distance: {distance}, reason: {reason}")
 
 #    # print the first 10 observed splice chains and their distances
 #     for i, (read_junctions, transcript_junctions, strand) in enumerate(splice_chains_observed[:10], 1):
 #         distance, reason = calculate_splice_distance(read_junctions, transcript_junctions, strand)
-#         logging.info(f"Observed splice chain {i}:")
-#         logging.info(f"  Read junctions: {read_junctions}")
-#         logging.info(f"  Closest transcript junctions: {transcript_junctions}")
-#         logging.info(f"  Strand: {strand}")
-#         logging.info(f"  Average distance: {distance}")
-#         logging.info(f"  Reason: {reason}")
-
+#         logging.info(f"observed splice chain {i}:")
+#         logging.info(f"  read junctions: {read_junctions}")
+#         logging.info(f"  closest transcript junctions: {transcript_junctions}")
+#         logging.info(f"  strand: {strand}")
+#         logging.info(f"  average distance: {distance}")
+#         logging.info(f"  reason: {reason}")
+    
     os.remove(bed_file)
     os.remove(temp_bam)
     os.remove(temp_bam + '.bai')
     
     return support_counts
 
-def parallel_process_genes(bam_file, genes, transcripts, poly_a_threshold):
-    logging.info("Processing genes in parallel...")
+def parallel_process_genes(bam_file, genes, transcripts, filter_column, filter_cutoff):
+    logging.info("processing genes in parallel...")
     available_cores = mp.cpu_count()
-    logging.info(f"Using all {available_cores} available cores")
+    logging.info(f"using all {available_cores} available cores")
 
     with tempfile.TemporaryDirectory() as temp_dir:
         pool = mp.Pool(available_cores)
@@ -215,9 +223,9 @@ def parallel_process_genes(bam_file, genes, transcripts, poly_a_threshold):
         for (chrom, strand), gene_list in genes.items():
             for i in range(0, len(gene_list), CHUNK_SIZE):
                 gene_chunk = gene_list[i:i+CHUNK_SIZE]
-                tasks.append((bam_file, gene_chunk, transcripts, temp_dir, poly_a_threshold))
+                tasks.append((bam_file, gene_chunk, transcripts, temp_dir, filter_column, filter_cutoff))
         
-        results = list(tqdm(pool.imap_unordered(process_bam_chunk, tasks), total=len(tasks), desc="Processing BAM chunks"))
+        results = list(tqdm(pool.imap_unordered(process_bam_chunk, tasks), total=len(tasks), desc="processing BAM chunks"))
         
         pool.close()
         pool.join()
@@ -227,11 +235,11 @@ def parallel_process_genes(bam_file, genes, transcripts, poly_a_threshold):
     for counts in results:
         combined_counts.update(counts)
     
-    logging.info(f"Processed {len(combined_counts)} genes")
+    logging.info(f"processed {len(combined_counts)} genes")
     return combined_counts
 
 def prepare_scoring_data(support_counts, transcripts):
-    logging.info("Preparing scoring data...")
+    logging.info("preparing scoring data...")
     scoring_data = {}
     for gene_id, gene_counts in support_counts.items():
         gene_end = max(transcripts[t_id]['end'] for t_id in gene_counts)
@@ -276,9 +284,9 @@ def process_scoring_chunk(args):
         scores = base_scores + length_bonus
         
         if np.sum(base_scores) == 0:
-            # No reads for this gene, but we still select the longest transcript
+            # no reads for this gene, but we still select the longest transcript
             genes_with_no_reads.append(gene_id)
-            best_index = np.argmax(scores)  # This will be determined by length_bonus
+            best_index = np.argmax(scores)  # this will be determined by length_bonus
             best_transcript = data['transcript_ids'][best_index]
             chunk_best_transcripts[gene_id] = best_transcript
         else:
@@ -303,7 +311,7 @@ def process_scoring_chunk(args):
     return chunk_best_transcripts, chunk_score_matrix, genes_with_no_reads
 
 def select_best_transcripts(support_counts, transcripts, score_matrix_file=None):
-    logging.info("Selecting best transcripts...")
+    logging.info("selecting best transcripts...")
     
     scoring_data = prepare_scoring_data(support_counts, transcripts)
     
@@ -313,7 +321,7 @@ def select_best_transcripts(support_counts, transcripts, score_matrix_file=None)
 
     with mp.Pool(processes=mp.cpu_count()) as pool:
         results = list(tqdm(pool.imap(process_scoring_chunk, chunk_args), 
-                            total=len(chunk_args), desc="Processing scoring chunks"))
+                            total=len(chunk_args), desc="processing scoring chunks"))
 
     best_transcripts = {}
     score_matrix = []
@@ -335,28 +343,28 @@ def select_best_transcripts(support_counts, transcripts, score_matrix_file=None)
             for row in score_matrix:
                 f.write('\t'.join(map(str, row)) + '\n')
         
-        logging.info(f"Score matrix written to {score_matrix_file}")
+        logging.info(f"score matrix written to {score_matrix_file}")
     
-    logging.info(f"Selected best transcripts for {genes_with_reads} genes with reads")
-    logging.info(f"Selected longest transcript for {genes_without_reads} genes without reads")
+    logging.info(f"selected best transcripts for {genes_with_reads} genes with reads")
+    logging.info(f"selected longest transcript for {genes_without_reads} genes without reads")
     
-    # Write the list of genes with no reads to a file
+    # write the list of genes with no reads to a file
     no_reads_file = score_matrix_file.rsplit('.', 1)[0] + '_genes_with_no_reads.txt'
     with open(no_reads_file, 'w') as f:
         for gene_id in all_genes_with_no_reads:
             f.write(f"{gene_id}\n")
-    logging.info(f"List of genes with no reads written to {no_reads_file}")
+    logging.info(f"list of genes with no reads written to {no_reads_file}")
 
     return best_transcripts, genes_with_reads, genes_without_reads
 
 def filter_gtf(gtf_file, best_transcripts, out_gtf):
-    logging.info("Filtering GTF...")
+    logging.info("filtering gtf...")
     db = gffutils.FeatureDB(gtf_file + ".db")
     with open(out_gtf, 'w') as out_f:
-        for gene in tqdm(db.features_of_type('gene'), desc="Writing GTF"):
+        for gene in tqdm(db.features_of_type('gene'), desc="writing GTF"):
             gene_id = gene.id
             if best_transcripts.get(gene_id) == 'all':
-                # Write all features for this gene
+                # write all features for this gene
                 out_f.write(str(gene) + '\n')
                 for transcript in db.children(gene, featuretype='transcript'):
                     out_f.write(str(transcript) + '\n')
@@ -379,22 +387,22 @@ def filter_gtf(gtf_file, best_transcripts, out_gtf):
                 for exon in db.children(transcript, featuretype='exon'):
                     out_f.write(str(exon) + '\n')
     
-    logging.info(f"Filtered GTF written to {out_gtf}")
+    logging.info(f"filtered gtf written to {out_gtf}")
 
-def main(bam_file, gtf_file, out_gtf, poly_a_threshold, score_matrix_file):
+def main(bam_file, gtf_file, out_gtf, filter_column, filter_cutoff, score_matrix_file):
     setup_logging()
-    logging.info("R1 annotation filtering initialised")
-    logging.info("Starting transcript selection process")
+    logging.info("r1 annotation filtering initialised")
+    logging.info("starting transcript selection process")
 
     # count number of genes in original annotation 
     original_gene_count = count_genes(gtf_file)
-    logging.info(f"Number of genes in the original GTF: {original_gene_count}")
+    logging.info(f"number of genes in the original GTF: {original_gene_count}")
     
     # load gtf using gffutils 
     genes, transcripts = load_gtf_into_memory(gtf_file)
 
     # calculate support level for each transcript based on splice count and gene coverage 
-    support_counts = parallel_process_genes(bam_file, genes, transcripts, poly_a_threshold)
+    support_counts = parallel_process_genes(bam_file, genes, transcripts, filter_column, filter_cutoff)
     best_transcripts, genes_with_reads, genes_without_reads = select_best_transcripts(support_counts, transcripts, score_matrix_file)
 
     # filter the gtf for the best transcript 
@@ -402,25 +410,26 @@ def main(bam_file, gtf_file, out_gtf, poly_a_threshold, score_matrix_file):
 
     # verify that we have the same number of genes after filtering 
     filtered_gene_count = count_genes(out_gtf)
-    logging.info(f"Number of genes in the filtered GTF: {filtered_gene_count}")
+    logging.info(f"number of genes in the filtered GTF: {filtered_gene_count}")
     if original_gene_count == filtered_gene_count:
-        logging.info("Gene count check passed: The number of genes before and after filtering is the same.")
+        logging.info("gene count check passed: the number of genes before and after filtering is the same.")
     else:
-        logging.error(f"Gene count mismatch: Original GTF had {original_gene_count} genes, but filtered GTF has {filtered_gene_count} genes.")
-        raise ValueError("The number of genes before and after filtering does not match.")
+        logging.error(f"gene count mismatch: original GTF had {original_gene_count} genes, but filtered GTF has {filtered_gene_count} genes.")
+        raise ValueError("the number of genes before and after filtering does not match.")
 
-    logging.info(f"Selected best transcript for {genes_with_reads} genes with reads")
-    logging.info(f"Selected longest transcript for {genes_without_reads} genes without reads")
-    logging.info("Transcript selection process completed")
+    logging.info(f"selected best transcript for {genes_with_reads} genes with reads")
+    logging.info(f"selected longest transcript for {genes_without_reads} genes without reads")
+    logging.info("transcript selection process completed")
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="ROGUE1 adaptive annotation filtering")
-    parser.add_argument("--bam_file", required=True, help="Input BAM file path")
-    parser.add_argument("--gtf_file", required=True, help="Input GTF file path")
-    parser.add_argument("--out_gtf", required=True, help="Output GTF file path")
-    parser.add_argument("--polyA", type=int, help="Minimum poly-A tail length for 3' end support")
-    parser.add_argument("--score_matrix", help="Output file path for scoring matrix")
+    parser.add_argument("--bam_file", required=True, help="input BAM file path")
+    parser.add_argument("--gtf_file", required=True, help="input GTF file path")
+    parser.add_argument("--out_gtf", required=True, help="output GTF file path")
+    parser.add_argument("--filter_column", required=True, help="column name to filter on")
+    parser.add_argument("--filter_cutoff", type=float, required=True, help="cutoff value for the filtering column")
+    parser.add_argument("--score_matrix", help="output file path for scoring matrix")
     args = parser.parse_args()
 
-    main(args.bam_file, args.gtf_file, args.out_gtf, args.polyA, args.score_matrix)
+    main(args.bam_file, args.gtf_file, args.out_gtf, args.filter_column, args.filter_cutoff, args.score_matrix)

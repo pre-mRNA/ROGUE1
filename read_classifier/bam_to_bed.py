@@ -45,7 +45,7 @@ def bam_to_bed(bam_file, output_dir, num_files):
     bam.close()
 
     # Convert BAM files to BED in parallel
-    with ThreadPoolExecutor(max_workers=104) as executor:
+    with ThreadPoolExecutor(max_workers=48) as executor:
         for i in range(num_files):
             executor.submit(run_command, f"bedtools bamtobed -i {temp_bam_files[i]} -splitD > {temp_bed_files[i]}", f"Converting BAM to BED: {i + 1}/{num_files}")
 
@@ -92,8 +92,8 @@ def bam_to_bed(bam_file, output_dir, num_files):
             strand = getattr(row, 'strand')
             read_end_coordinate[read_name] = f'{chrom}:{start}:{strand}'
 
-    # calculate the total algined length for each read 
-    with ThreadPoolExecutor(max_workers=104) as executor:
+    # calculate the total aligned length for each read 
+    with ThreadPoolExecutor(max_workers=48) as executor:
         total_aligned_length = bed_df.groupby('name')['aligned_length'].sum().to_dict()
 
     logging.info("Calculating sequence lengths")
