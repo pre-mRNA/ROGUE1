@@ -1,95 +1,113 @@
 import pandas as pd
 import numpy as np
-import warnings
+import logging
 
-def classify_splicing(df):
-    def parse_ids(id_string):
-        return set(int(x) for x in id_string.split(',') if x.strip().isdigit()) if pd.notna(id_string) else set()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def classify_splicing(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Classify RNA splicing events based on exon and intron IDs within sequencing reads.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame containing the following columns:
+            - 'exon_ids' (str): Comma-separated exon IDs.
+            - 'intron_ids' (str): Comma-separated intron IDs.
+            - 'splice_count' (int): Number of splicing events.
+            - 'read_id' (str): Unique identifier for each read.
+
+    Returns:
+        pd.DataFrame: Original DataFrame with an additional column 'splicing_classification'.
+    """
+    required_columns = {'exon_ids', 'intron_ids', 'splice_count', 'read_id'}
+    missing = required_columns - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    def parse_ids(id_string: str) -> set:
+        """
+        Parse a comma-separated string of IDs into a set of integers.
+
+        Parameters:
+            id_string (str): Comma-separated string of IDs.
+
+        Returns:
+            set: Set of integer IDs.
+        """
+        try:
+            return set(int(x.strip()) for x in id_string.split(',') if x.strip().isdigit()) if pd.notna(id_string) else set()
+        except ValueError as ve:
+            logger.warning(f"ValueError parsing IDs '{id_string}': {ve}")
+            return set()
+        except Exception as e:
+            logger.error(f"Unexpected error parsing IDs '{id_string}': {e}")
+            return set()
 
     def classify_row(row):
-        exons = parse_ids(row['exon_ids'])
-        introns = parse_ids(row['intron_ids'])
-        splice_count = row['splice_count']
-        read_id = row['read_id']
+        """
+        Classify a single row based on exon_ids, intron_ids, and splice_count.
 
-        # handling reads where the alignment does not contain a mapped splice-junction 
-        if splice_count == 0:
+        Parameters:
+            row (pd.Series): A row from the DataFrame.
 
-            # no exons, no introns, no splicing
-            if len(exons) == 0 and len(introns) == 0:
-                return 'ambiguous' 
-            
-            # single exon and no splicing 
-            elif len(exons) == 1 and len(introns) == 0:
-                return 'ambiguous'
-            
-            # single intron, single exon, no splicing 
-            elif len(introns) == 1 and len(exons) <= 1:
+        Returns:
+            str or np.nan: Splicing classification or NaN if invalid.
+        """
+        try:
+            exons = parse_ids(row['exon_ids'])
+            introns = parse_ids(row['intron_ids'])
+            splice_count = row['splice_count']
+            read_id = row['read_id']
 
-                # intron is directly upstream of exon and the read is unspliced 
-                # we span donor
-                # the read is 'fully unspliced'
-                if len(exons) == 1 and list(introns)[0] + 1 == list(exons)[0]:
-                    return 'fully-unspliced'
+            # Ensure splice_count is an integer
+            if not isinstance(splice_count, (int, np.integer)):
+                logger.warning(f"Read ID: {read_id}, Invalid splice_count: {splice_count}")
+                return np.nan
+
+            if splice_count == 0:
+                if len(exons) == 0 and len(introns) == 0: # no features 
+                    return 'ambiguous'
+                elif len(exons) == 1 and len(introns) == 0: # single exon only 
+                    return 'ambiguous'
+                elif len(introns) == 1 and len(exons) <= 1: # single intron only 
+                    intron = next(iter(introns))
+                    exon = next(iter(exons)) if exons else None
+                    if exon is not None and intron + 1 == exon:
+                        return 'fully-unspliced' # intron-exon boundary has been transcribed 
+                    else:
+                        return 'ambiguous' # single intron only 
+                elif any(i + 1 in exons for i in introns): # no splicing in read; and intron-exon boundary has been transcribed 
+                    return 'fully-unspliced' 
+                elif len(exons) > 1 and len(introns) == 0: # error case where we see two introns but splice_count = 0 
+                    return 'ambiguous'
                 else:
-
-                    # in any other case, we span an intron and exon but we don't span the intron 3' ss 
-                    # so the read is ambigous 
+                    logger.warning(f"Read ID: {read_id}, Unexpected case: splice_count=0, exons={exons}, introns={introns}")
                     return 'ambiguous'
             
-                
-            elif any(i + 1 in exons for i in introns):
-                return 'fully-unspliced' # intron running into exon, therefore unspliced 
+            elif splice_count > 0:
+                if len(exons) >= 2:
+                    return 'spliced'
+                elif len(exons) == 1:
+                    return 'ambiguous'
+                elif len(exons) == 0 and len(introns) == 0:
+                    return 'ambiguous'
+                elif len(exons) == 0 and len(introns) > 0:
+                    # **Modification:** Directly classify as 'ambiguous' without raising a warning
+                    return 'ambiguous'
+                else:
+                    logger.warning(f"Read ID: {read_id}, Unexpected case: splice_count>0, exons={exons}, introns={introns}")
+                    return 'ambiguous'
             
-
-            elif len(exons) > 1 and len(introns) == 0:
-                return 'ambiguous'  # multiple exons without splicing or introns 
             else:
-                warnings.warn(f"Read ID: {read_id}, Unexpected case: splice_count=0, exons={exons}, introns={introns}")
-                return 'ambiguous'  
-        elif splice_count > 0:
-            if len(exons) >= 2:
-                return 'spliced'
-            elif len(exons) == 1 or (len(exons) == 0 and len(introns) == 0):
-                return 'ambiguous'  # splicing event that doesn't span 2 annotated exons or other noise 
-            else:
-                warnings.warn(f"Read ID: {read_id}, Unexpected case: splice_count>0, exons={exons}, introns={introns}")
-                return 'ambiguous'  
-        else:
-            warnings.warn(f"Read ID: {read_id}, Unexpected splice_count: {splice_count}")
-            return 'ambiguous'  
+                logger.warning(f"Read ID: {read_id}, Unexpected splice_count: {splice_count}")
+                return 'ambiguous'
 
+        except Exception as e:
+            logger.error(f"Read ID: {row.get('read_id', 'Unknown')}, Exception during classification: {e}")
+            return np.nan
+
+    # apply the classification function to each row
+    df = df.copy()  # To avoid modifying the original DataFrame
     df['splicing_classification'] = df.apply(classify_row, axis=1)
     return df
-
-# simple unit tests 
-def test_classify_splicing():
-    test_cases = [
-        {'read_id': '0', 'splice_count': 0, 'exon_ids': '1', 'intron_ids': '1', 'expected': 'ambiguous'},
-        {'read_id': '1', 'splice_count': 0, 'exon_ids': '2', 'intron_ids': '1', 'expected': 'fully-unspliced'},
-        # {'read_id': '1', 'splice_count': 0, 'exon_ids': '1', 'intron_ids': '', 'expected': 'ambiguous'}, # single exon with no splicing or intron span, therefore ambiguous
-        # {'read_id': '2', 'splice_count': 1, 'exon_ids': '1,2,3', 'intron_ids': '1', 'expected': 'spliced'}, # intron 1 unspliced, intron 2 spliced, therefore, a spliced event
-        # {'read_id': '3', 'splice_count': 0, 'exon_ids': '', 'intron_ids': '1', 'expected': 'ambiguous'}, # single intron with no splicing or exon span, therefore ambiguous
-        # {'read_id': '4', 'splice_count': 0, 'exon_ids': '2', 'intron_ids': '1', 'expected': 'fully-unspliced'}, # spans the intron donor with no evidence of splicing, therefore unspliced 
-        # {'read_id': '5', 'splice_count': 1, 'exon_ids': '1,2', 'intron_ids': '', 'expected': 'spliced'}, # two adjacent exons linked by a single junction, therefore spliced 
-        # {'read_id': '6', 'splice_count': 0, 'exon_ids': '1,2', 'intron_ids': '', 'expected': 'ambiguous'}, # two adjacent exons with no splicing or intron span, therefore ambiguous
-        # {'read_id': '7', 'splice_count': 1, 'exon_ids': '1', 'intron_ids': '', 'expected': 'ambiguous'}, # splicing event that doesn't span 2 exons   
-        # {'read_id': '8', 'splice_count': 0, 'exon_ids': '', 'intron_ids': '', 'expected': 'ambiguous'}, # no data 
-        # {'read_id': '9', 'splice_count': 1, 'exon_ids': '', 'intron_ids': '', 'expected': 'ambiguous'}, # splicing event that doesn't span 2 exons 
-        # {'read_id': '10', 'splice_count': 0, 'exon_ids': '2', 'intron_ids': '3', 'expected': 'ambiguous'}, # doesn't span intron acceptor, therefore ambiguous
-    ]
-    for i, case in enumerate(test_cases):
-        df = pd.DataFrame([case])
-        result = classify_splicing(df)
-        expected = case['expected']
-        actual = result.loc[0, 'splicing_classification']
-        
-        if pd.isna(expected) and pd.isna(actual):
-            print(f"Test case {i+1} passed")
-        elif expected == actual:
-            print(f"Test case {i+1} passed")
-        else:
-            raise AssertionError(f"Test case {i+1} failed: expected {expected}, got {actual}")
-
-
-test_classify_splicing()

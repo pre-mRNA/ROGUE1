@@ -130,7 +130,9 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
         missing_df.set_index('read_id', inplace=True)
         end_features = pd.concat([end_features, missing_df])
 
+    logging.info(f"DataFrame shape before merging with end_features: {df.shape}")
     df = pd.merge(df, end_features, on=['read_id', 'gene_id'], how='left')
+    logging.info(f"DataFrame shape after merging with end_features: {df.shape}")
     df['feature'] = df['feature'].fillna('unclassified')
     df.rename(columns={'feature': 'three_prime_feature'}, inplace=True)
 
@@ -157,7 +159,9 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     if calculate_polyA:
         polyA_lengths = fetch_polyA_pt(bam_file)
         polyA_df = pd.DataFrame(list(polyA_lengths.items()), columns=['read_id', 'polya_length'])
+        logging.info(f"DataFrame shape before merging with polyA_df: {df.shape}")
         df = pd.merge(df, polyA_df, on='read_id', how='left')
+        logging.info(f"DataFrame shape after merging with polyA_df: {df.shape}")
 
     # calculate distance to junctions if requested 
     if junction_distance: 
@@ -196,7 +200,9 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
         ).rename(columns={'Chromosome': 'chromosome', 'Start': 'position', 'Strand': 'strand'})
 
         # calculate distances to nearest splice donors 
+        logging.info(f"DataFrame shape before calculating distance to splice donors: {df.shape}")
         df = calculate_distance_to_read_ends(df, splice_donors, "splice_donors")
+        logging.info(f"DataFrame shape after calculating distance to splice donors: {df.shape}")
 
     # fetch the gene biotypes 
     biotypes = get_biotypes(gtf_file)
@@ -210,8 +216,13 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
 
     # classify canonical splicing from acceptors 
     if record_exons:
+        
         logging.info("Classifying splicing status for reads...")
+        logging.info(f"DataFrame shape before splicing classification: {df.shape}")
+
+        # note; this reclassifies reads in DOG regions as being in the last exon if they are within 20 nt of the poly(A) site 
         df = classify_splicing(df)
+        logging.info(f"DataFrame shape after splicing classification: {df.shape}")
         logging.info("Splicing classification complete.")
 
     # calculate distances between read ends and nearest transcript end sites 

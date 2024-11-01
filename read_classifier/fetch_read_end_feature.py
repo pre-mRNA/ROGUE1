@@ -164,6 +164,11 @@ def get_end_feature(temp_bed_files, genome_file, output_dir, dog_bed_file, exon_
 
     df = pd.DataFrame(final_data)
     df.set_index('read_id', inplace=True)
+
+    # save end features as tmpfile
+    feature_file = os.path.join(output_dir, 'sorted_processed_3prime_6nt_final.bed')
+    df.to_csv(feature_file, sep='\t')
+
     logging.info(f"DataFrame created with {len(df)} rows, indexed by read_id.")
 
     return df

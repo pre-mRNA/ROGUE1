@@ -1,56 +1,42 @@
-from tempfile import NamedTemporaryFile
-
-from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
-import concurrent.futures
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import subprocess
-import csv 
+import csv
 
-# parent function to split bed file 
 def split_bed_file(bed_file, output_dir, num_files):
-    # Read file
-    with open(bed_file) as f:
+
+    temp_bed_files = [os.path.join(output_dir, f"temp_chunk_{i}.bed") for i in range(num_files)]
+    file_handlers = [open(temp_file, 'w', newline='') for temp_file in temp_bed_files]
+    writers = [csv.writer(f, delimiter='\t') for f in file_handlers]
+
+    with open(bed_file, 'r') as f:
         reader = csv.reader(f, delimiter='\t')
-        lines = list(reader)
+        for idx, row in enumerate(reader):
+            writers[idx % num_files].writerow(row)
 
-    # Determine chunk size
-    chunk_size = len(lines) // num_files
-    temp_bed_files = []
+    for f in file_handlers:
+        f.close()
 
-    # Create a ThreadPool and submit jobs
-    with concurrent.futures.ProcessPoolExecutor(max_workers=48) as executor:
-        futures = []
-        for i in range(num_files):
-            start = i * chunk_size
-            end = (i + 1) * chunk_size if i != num_files - 1 else None
-            futures.append(executor.submit(write_sorted_chunk, lines[start:end], output_dir, i))
+    sorted_files = []
+    with ProcessPoolExecutor(max_workers=104) as executor:  
+        futures = {executor.submit(write_sorted_chunk, chunk_file, output_dir, i): i for i, chunk_file in enumerate(temp_bed_files)}
+        for future in as_completed(futures):
+            sorted_files.append(future.result())
 
-        # Collect the results as they become available
-        for future in concurrent.futures.as_completed(futures):
-            temp_bed_files.append(future.result())
+    for temp_file in temp_bed_files:
+        os.remove(temp_file)
 
-    return temp_bed_files
+    return sorted_files
 
-# split bedfile into chunks
-# daughter function to write sorted chunks 
-def write_sorted_chunk(chunk, output_dir, index):
-    
-    # define the sorted file path
-    sorted_file = NamedTemporaryFile(dir=output_dir, delete=False, suffix=f"_sorted_{index}.bed").name
+def write_sorted_chunk(chunk_file, output_dir, index):
+    sorted_file = os.path.join(output_dir, f"sorted_chunk_{index}.bed")
 
-    with open(sorted_file, 'w', newline='') as out:
-    
+    with open(sorted_file, 'w') as out:
         sort_process = subprocess.Popen(
-            ['sort', '-k1,1', '-k2,2n', '--parallel=48', '--buffer-size=80G'],
-            stdin=subprocess.PIPE, stdout=out, universal_newlines=True
+            ['sort', '-k1,1', '-k2,2n', '--parallel=4', '--buffer-size=16G'],  
+            stdin=open(chunk_file, 'r'),
+            stdout=out
         )
-
-        for row in chunk:
-            print(*row, sep='\t', file=sort_process.stdin)
-
-        # close the sort_process stdin 
-        sort_process.stdin.close()
-
-        # wait for the sort process to finish
         sort_process.wait()
 
     return sorted_file
