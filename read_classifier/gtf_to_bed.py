@@ -14,29 +14,20 @@ def gtf_to_bed(gtf_file, feature_type, output_dir):
     bed_file = NamedTemporaryFile(dir=output_dir, delete=False, suffix=f"_{feature_type}_gtf_to_bed.bed").name
 
     if feature_type == "gene":
-        # For gene features
-        # Infer gene regions from the ends of the exons that have been extracted
 
+        # infer gene boundaries from exons
         logging.info("Extracting exons to infer gene boundaries")
-
-        # Step 1: Extract exons
         exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
 
-        # Step 2: Read exon BED into pandas DataFrame
         try:
-            exon_df = pd.read_csv(
-                exon_bed, 
-                sep='\t', 
-                header=None, 
-                names=['chromosome', 'start', 'end', 'gene_id', 'gene_name', 'strand']
-            )
+            exon_df = pd.read_csv(exon_bed, sep='\t', header=None, names=['chromosome', 'start', 'end', 'gene_id', 'gene_name', 'strand'])
         except Exception as e:
             logging.error(f"Failed to read exon BED file: {exon_bed}. Error: {e}")
             raise e
 
         logging.info(f"Number of exons extracted: {len(exon_df)}")
 
-        # Step 3: Group by gene_id and compute gene boundaries
+        # group exons by gene and calculate outer boundaries 
         try:
             gene_df = exon_df.groupby('gene_id').agg({
                 'chromosome': 'first',
@@ -46,17 +37,9 @@ def gtf_to_bed(gtf_file, feature_type, output_dir):
                 'strand': 'first'
             }).reset_index()
 
-            # Reorder columns to match BED format
             gene_df = gene_df[['chromosome', 'start', 'end', 'gene_id', 'gene_name', 'strand']]
 
-            # Write to BED file
-            gene_df.to_csv(
-                bed_file, 
-                sep='\t', 
-                header=False, 
-                index=False
-            )
-
+            gene_df.to_csv(bed_file, sep='\t', header=False, index=False)
             logging.info(f"Gene BED file created successfully: {bed_file}")
 
         except Exception as e:
