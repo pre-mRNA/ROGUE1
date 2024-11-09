@@ -12,18 +12,67 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 def gtf_to_bed(gtf_file, feature_type, output_dir):
 
     bed_file = NamedTemporaryFile(dir=output_dir, delete=False, suffix=f"_{feature_type}_gtf_to_bed.bed").name
-    
+
     if feature_type == "gene":
-        cmd = f"cat {gtf_file} | awk 'OFS=\"\\t\" {{if ($3==\"gene\") {{print $1,$4-1,$5,$10,$20,$7}}}}' | tr -d '\";' | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G > {bed_file}"
-    
+        # For gene features
+        # Infer gene regions from the ends of the exons that have been extracted
+
+        logging.info("Extracting exons to infer gene boundaries")
+
+        # Step 1: Extract exons
+        exon_bed = gtf_to_bed(gtf_file, "exon", output_dir)
+
+        # Step 2: Read exon BED into pandas DataFrame
+        try:
+            exon_df = pd.read_csv(
+                exon_bed, 
+                sep='\t', 
+                header=None, 
+                names=['chromosome', 'start', 'end', 'gene_id', 'gene_name', 'strand']
+            )
+        except Exception as e:
+            logging.error(f"Failed to read exon BED file: {exon_bed}. Error: {e}")
+            raise e
+
+        logging.info(f"Number of exons extracted: {len(exon_df)}")
+
+        # Step 3: Group by gene_id and compute gene boundaries
+        try:
+            gene_df = exon_df.groupby('gene_id').agg({
+                'chromosome': 'first',
+                'start': 'min',
+                'end': 'max',
+                'gene_name': 'first',
+                'strand': 'first'
+            }).reset_index()
+
+            # Reorder columns to match BED format
+            gene_df = gene_df[['chromosome', 'start', 'end', 'gene_id', 'gene_name', 'strand']]
+
+            # Write to BED file
+            gene_df.to_csv(
+                bed_file, 
+                sep='\t', 
+                header=False, 
+                index=False
+            )
+
+            logging.info(f"Gene BED file created successfully: {bed_file}")
+
+        except Exception as e:
+            logging.error(f"Failed to process gene boundaries. Error: {e}")
+            raise e
+        
     elif feature_type == "exon":
         # we use a complex set of commands to merge overlapping exon entries by gene, otherwise, the overlap lengths by gene(at exon level) are confounded by overlapping exons
         # inspired by https://www.biostars.org/p/469489/#469503
         cmd = f"cat {gtf_file} |  grep -v \"intron\" | grep -v \"protein_coding_CDS_not_defined\" | awk 'OFS=\"\\t\" {{if ($3==\"exon\") {{print $1,$4-1,$5,$10,$20,$7}}}}' | tr -d '\";' | awk 'OFS=\"\\t\" {{print $4, $5, $6, $2, $3, $1}}' | sed 's/\\t/;/' | sed 's/\\t/;/' | sort -k1,1 -k2,2n --parallel=104 --buffer-size=80G | bedtools merge -i - -c 4 -o first | sed 's/;/\\t/' | sed 's/;/\\t/' | awk 'OFS=\"\\t\" {{print $6, $4, $5, $1, $2, $3}}' | sort -k1,1 -k2,2n -k3,3n --parallel=48 --buffer-size=32G > {bed_file}"
         logging.info("Skipping intron-contianing and protein-coding CDS not defined biotypes while parsing exons")
+        run_command(cmd, "extracting exons ")
 
     elif feature_type == "transcript":
         cmd = f"cat {gtf_file} | awk 'OFS=\"\\t\" {{if ($3==\"transcript\") {{print $1,$4-1,$5,$10,$18,$7}}}}' | tr -d '\";' | awk 'OFS=\"\\t\" {{if ($6==\"+\") {{print $1,$3,$3,$4,$5,$6}} else {{print $1,$2,$2,$4,$5,$6}}}}' | sort -k1,1 -k2,2n --parallel=48 --buffer-size=32G > {bed_file}"
+        run_command(cmd, "Converting intron by subtracting exons from trimmed genes")
 
     elif feature_type == "intron":
         gene_bed = gtf_to_bed(gtf_file, "gene", output_dir)
@@ -33,16 +82,18 @@ def gtf_to_bed(gtf_file, feature_type, output_dir):
         -b <(awk 'BEGIN{{FS=OFS="\\t"}} {{print $1 ";" $4, $2, $3, $4, $5, $6}}' {exon_bed} | sort -k1,1 -k2,2n) | \
         awk 'BEGIN{{FS=OFS="\\t"}} {{split($1, a, ";"); $1=a[1]; print}}' > {bed_file}
         """
+        run_command(cmd, "Converting intron by subtracting exons from trimmed genes")
+
     else:
             raise ValueError(f"Unknown feature type: {feature_type}. Valid options are 'gene', 'exon', and 'transcript'.")
 
-    run_command(cmd, f"Converting {feature_type} GTF to BED")
     return bed_file
 
 # number exons and introns by strand 
 def number_exons_and_introns_in_bed(input_bed, output_bed, feature_type):
     df = pd.read_csv(input_bed, sep='\t', header=None, 
-                     names=['chrom', 'start', 'end', 'gene_id', 'score', 'strand'])
+                     names=['chrom', 'start', 'end', 'gene_id', 'score', 'strand'],
+                     low_memory=False)
     
     # number features grouped by gene and considering strand 
     def number_features(group):

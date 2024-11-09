@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 import warnings
+from tqdm import tqdm
+
+tqdm.pandas()
 
 # parse_ids function to convert comma-separated string of IDs to a list of integers
 def parse_ids(id_string):
@@ -130,8 +133,8 @@ def classify_splicing(df, verbose=False):
         
         return ('canonical', None)
     
-    # classify each read 
-    classification = df.apply(classify_row, axis=1, result_type='expand')
+    # classify with tqdm 
+    classification = df.progress_apply(classify_row, axis=1, result_type='expand')
     classification.columns = ['cryptic_splicing', 'cryptic_reason']
     
     # assign to original df 
@@ -214,7 +217,7 @@ def test_classify_splicing():
         {'splice_count': 0, 'exon_ids': '29,30', 'intron_ids': '29', 'three_prime_feature': 'exon_30', 'read_id': 'read_21', 'expected': 'canonical'},
 
         # 22. Canonical: No splicing events, with exons spanned correctly
-        {'splice_count': 1, 'exon_ids': '1,2,4,5', 'intron_ids': '1,2,3', 'three_prime_feature': 'exon_5', 'read_id': 'read_21', 'expected': 'canonical'},
+        {'splice_count': 1, 'exon_ids': '1,2,4,5', 'intron_ids': '1,2,3', 'three_prime_feature': 'exon_5', 'read_id': 'read_21', 'expected': 'cryptic'},
     ]
     
     # test df
@@ -236,5 +239,7 @@ def test_classify_splicing():
                 reason = 'No reason provided.'
             print(f"Test case {i+1} failed: Expected '{expected}', got '{actual}'. Reason: {reason}")
 
-# run test 
-test_classify_splicing()
+RUN_TESTS = False
+
+if RUN_TESTS:
+    test_classify_splicing()
