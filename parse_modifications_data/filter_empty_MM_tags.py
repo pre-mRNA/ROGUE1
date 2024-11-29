@@ -41,66 +41,97 @@ def process_read(read):
         mm_tag = read.get_tag('MM')
         ml_tag = read.get_tag('ML')
         
+        logging.info("filtering only for 'A+a' modifications")
+        
         mm_parts = mm_tag.split(';')
+        cumulative_index = 0
+        a_plus_a_indices = []
+        a_plus_a_nums = []
+        
         for part in mm_parts:
-            if part.startswith('A+a'):
-                base_mods = list(map(int, part.split(',')[1:]))
-                break
-        else:
-            return read  
+            if not part:
+                continue
+            mod_split = part.split(',')
+            mod_name = mod_split[0]
+            nums = mod_split[1:]
+            num_count = len(nums)
+            if mod_name.startswith('A+a'):
+                a_plus_a_indices.extend(range(cumulative_index, cumulative_index + num_count))
+                a_plus_a_nums.extend([int(n) for n in nums])
+            cumulative_index += num_count
+        
+        if not a_plus_a_indices:
+            return read
         
         ml_values = list(ml_tag)
         
-        new_base_mods = []
-        new_ml_values = []
+        if len(ml_values) < cumulative_index:
+            logging.error(f"ml tag has fewer values ({len(ml_values)}) than expected ({cumulative_index})")
+            return read
+        
+        a_plus_a_ml_values = [ml_values[i] for i in a_plus_a_indices]
+        filtered_a_plus_a_nums = []
+        new_ml_values_filtered = []
         cumulative_sum = 0
         removed_count = 0
         
-        for i, (mod, ml) in enumerate(zip(base_mods, ml_values)):
+        for mod, ml in zip(a_plus_a_nums, a_plus_a_ml_values):
             if ml == 255:
                 if cumulative_sum > 0 or removed_count > 0:
-                    new_base_mods.append(mod + cumulative_sum + removed_count)
+                    filtered_a_plus_a_nums.append(mod + cumulative_sum + removed_count)
                     cumulative_sum = 0
                     removed_count = 0
                 else:
-                    new_base_mods.append(mod)
-                new_ml_values.append(ml)
+                    filtered_a_plus_a_nums.append(mod)
+                new_ml_values_filtered.append(ml)
             else:
                 cumulative_sum += mod
                 removed_count += 1
         
-        new_mm_tag = f"A+a?,{','.join(map(str, new_base_mods))};"
-        read.set_tag('MM', new_mm_tag)
+        if filtered_a_plus_a_nums:
+            new_mm_tag = f"A+a?," + ",".join(map(str, filtered_a_plus_a_nums)) + ";"
+            new_ml_tag = array.array('B', new_ml_values_filtered)
+        else:
+            new_mm_parts = [part for part in mm_parts if not part.startswith('A+a')]
+            new_mm_tag = ';'.join(new_mm_parts) if new_mm_parts else ''
+            new_ml_values = [ml for i, ml in enumerate(ml_values) if i not in a_plus_a_indices]
+            new_ml_tag = array.array('B', new_ml_values)
         
-        new_ml_tag = array.array('B', new_ml_values)
-        read.set_tag('ML', new_ml_tag)
-    
+        if new_mm_tag:
+            read.set_tag('MM', new_mm_tag)
+        else:
+            read.remove_tag('MM')
+        
+        if new_ml_tag:
+            read.set_tag('ML', new_ml_tag)
+        else:
+            read.remove_tag('ML')
+        
     return read
 
 def main():
     parser = argparse.ArgumentParser(description="Process BAM file and modify MM/ML tags.")
-    parser.add_argument("-ibam", required=True, help="Input BAM file")
-    parser.add_argument("-obam", required=True, help="Output BAM file")
-    parser.add_argument("-t", "--threads", type=int, default=8, help="Number of threads to use")
+    parser.add_argument("-ibam", required=True, help="input bam file")
+    parser.add_argument("-obam", required=True, help="output bam file")
+    parser.add_argument("-t", "--threads", type=int, default=8, help="number of threads to use")
 
     args = parser.parse_args()
 
     setup_logging()
 
-    logging.info(f"Starting BAM processing with {args.threads} threads")
-    logging.info(f"Input BAM file: {args.ibam}")
-    logging.info(f"Output BAM file: {args.obam}")
+    logging.info(f"starting BAM processing with {args.threads} threads")
+    logging.info(f"input BAM file: {args.ibam}")
+    logging.info(f"output BAM file: {args.obam}")
 
     if not os.path.exists(args.ibam):
-        logging.error(f"Input BAM file does not exist: {args.ibam}")
+        logging.error(f"input BAM file does not exist: {args.ibam}")
         sys.exit(1)
 
     modified_count = 0
     total_count = 0
 
-    # update bam header with version and command line
     command_line = ' '.join(['python'] + sys.argv)
-    description = 'Modified MM and ML tags: filtered for ML=255 and adjusted MM values'
+    description = 'modified MM and ML tags: filtered for A+a with ML=255'
 
     try:
         with pysam.AlignmentFile(args.ibam, 'rb', threads=args.threads) as infile:
@@ -112,21 +143,21 @@ def main():
                     total_count += 1
                     modified_read = process_read(read)
                     outfile.write(modified_read)
-                    if read.has_tag('MM') and read.has_tag('ML'):
+                    if modified_read.has_tag('MM') and modified_read.has_tag('ML'):
                         modified_count += 1
 
                     if total_count % 100000 == 0:
-                        logging.info(f"Processed {total_count} reads, modified {modified_count}")
+                        logging.info(f"processed {total_count} reads, modified {modified_count}")
 
-        logging.info(f"Indexing output BAM file: {args.obam}")
+        logging.info(f"indexing output BAM file: {args.obam}")
         pysam.index(args.obam, threads=args.threads)
 
-        logging.info(f"Total reads processed: {total_count}")
-        logging.info(f"Reads with modified MM/ML tags: {modified_count}")
+        logging.info(f"total reads processed: {total_count}")
+        logging.info(f"reads with modified MM/ML tags: {modified_count}")
 
     except Exception as e:
-        logging.error(f"An error occurred during processing: {str(e)}")
-        logging.error(f"Error details: {str(e)}", exc_info=True)
+        logging.error(f"an error occurred during processing: {str(e)}")
+        logging.error(f"error details: {str(e)}", exc_info=True)
         sys.exit(1)
 
 if __name__ == "__main__":
