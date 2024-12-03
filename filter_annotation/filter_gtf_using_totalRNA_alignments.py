@@ -361,12 +361,13 @@ def process_scoring_chunk(args):
         scores = base_scores + length_bonus
         
         if np.sum(base_scores) == 0:
-            # if no reads for a gene, select the longest transcript based on length_bonus
+            # if no reads for a gene, select the transcript with the smallest distance between start and end
             genes_with_no_reads.append(gene_id)
-            best_index = np.argmax(scores)  
+            transcript_lengths = data['transcript_ends'] - data['transcript_starts'] + 1
+            best_index = np.argmax(transcript_lengths)
             best_transcript = data['transcript_ids'][best_index]
-            best_transcript = str(best_transcript)  
             chunk_best_transcripts[gene_id] = best_transcript
+
             logging.info(f"No reads for gene {gene_id}. Selected longest transcript {best_transcript}.")
         else:
             best_index = np.argmax(scores)
@@ -460,7 +461,7 @@ def select_best_transcripts(support_counts, transcripts, score_matrix_file=None)
     
     return best_transcripts, genes_with_reads, genes_without_reads
 
-def filter_gtf(gtf_file, best_transcripts, out_gtf):
+def filter_gtf(gtf_file, best_transcripts, transcripts, out_gtf):
     """
     Filters the GTF file to retain only the best transcripts per gene using grep-like functionality.
     Writes all 'gene' entries and only 'transcript' and 'exon' entries with transcript_ids in best_transcripts.
@@ -468,13 +469,13 @@ def filter_gtf(gtf_file, best_transcripts, out_gtf):
     logging.info("Filtering GTF based on best transcripts...")
     
     try:
-        
         best_transcript_ids = set(best_transcripts.values())
         
         with open(gtf_file, 'r') as in_f, open(out_gtf, 'w') as out_f:
             for line in tqdm(in_f, desc="Writing GTF"):
                 if line.startswith('#') or not line.strip():
                     # keep header
+                    out_f.write(line)
                     continue
                 
                 fields = line.strip().split('\t')
@@ -486,7 +487,22 @@ def filter_gtf(gtf_file, best_transcripts, out_gtf):
                 attributes = fields[8]
                 
                 if feature_type == 'gene':
-                    out_f.write(line)
+                    gene_id = None
+                    for attr in attributes.split(';'):
+                        attr = attr.strip()
+                        if attr.startswith('gene_id'):
+                            parts = attr.split(' ')
+                            if len(parts) >= 2:
+                                gene_id = parts[1].strip('"')
+                            break
+                    if gene_id and gene_id in best_transcripts:
+                        best_transcript_id = best_transcripts[gene_id]
+                        transcript_data = transcripts.get(best_transcript_id)
+                        if transcript_data:
+                            fields[3] = str(transcript_data['start'])  
+                            fields[4] = str(transcript_data['end'])    
+                        out_f.write('\t'.join(fields) + '\n')
+
                 elif feature_type in ['transcript', 'exon']:
                     transcript_id = None
                     for attr in attributes.split(';'):
@@ -498,6 +514,7 @@ def filter_gtf(gtf_file, best_transcripts, out_gtf):
                             break
                     if transcript_id and transcript_id in best_transcript_ids:
                         out_f.write(line)
+                        
         logging.info(f"Filtered GTF written to {out_gtf}")
     except Exception as e:
         logging.error(f"Error filtering GTF: {str(e)}")
@@ -607,7 +624,7 @@ def main():
 
     # filter gtf annotation 
     try:
-        filter_gtf(args.gtf_file, best_transcripts, args.out_gtf)
+        filter_gtf(args.gtf_file, best_transcripts, transcripts, args.out_gtf)
     except Exception as e:
         logging.error(f"Failed during GTF filtering: {str(e)}")
         raise
