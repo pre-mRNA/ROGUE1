@@ -4,7 +4,7 @@ import pandas as pd
 from collections import defaultdict
 import os
 
-def classify_polya_reads(df, output_dir, co_threshold=1.6, post_threshold=1.9):
+def classify_polya_reads(df, output_dir, co_threshold=1.8, post_threshold=3.6):
     
     # check for required columns
     required_columns = ['polya_length', 'biotype', 'alignment_length', 'gene_id', 'read_id']
@@ -20,15 +20,13 @@ def classify_polya_reads(df, output_dir, co_threshold=1.6, post_threshold=1.9):
     classification_summary = []
     gene_post_counts = defaultdict(int)
     gene_total_counts = defaultdict(int)
-    df['polya_classification'] = np.nan
-    df['polya_z_score'] = np.nan
-    
+
     
     # ensure 'polya_length' is numeric
     df['polya_length'] = pd.to_numeric(df['polya_length'], errors='coerce')
     
-    # define mask for valid 'polya_length' and 'alignment_length' > 200
-    valid_mask = (df['polya_length'].notna()) & (df['alignment_length'] > 200)
+    # define mask for valid 'polya_length' and 'alignment_length' >= 200
+    valid_mask = (df['polya_length'].notna()) & (df['alignment_length'] >= 200)
     
     # filter for protein_coding genes
     protein_coding_mask = (df['biotype'] == target_biotype) & valid_mask
@@ -58,9 +56,9 @@ def classify_polya_reads(df, output_dir, co_threshold=1.6, post_threshold=1.9):
     
     # classify from thresholds
     def classify_z_score(z):
-        if z < co_threshold:
+        if z <= co_threshold:
             return 'co_transcriptional'
-        elif z > post_threshold:
+        elif z >= post_threshold:
             return 'post_transcriptional'
         else:
             return 'uncertain'

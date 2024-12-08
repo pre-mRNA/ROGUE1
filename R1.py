@@ -230,6 +230,7 @@ def main(bam_file, gtf_file, output_table, calculate_modifications, calculate_po
     end_position_df = calculate_distance_to_read_ends(df, transcript_ends, "polyA")
 
     # classify reads based on Poly(A) lengths
+    # calculate poly(A) after attaching biotypes 
     if calculate_polyA:
         end_position_df = classify_polya_reads(end_position_df, output_dir, co_threshold, post_threshold)
 
