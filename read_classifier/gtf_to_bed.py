@@ -39,12 +39,24 @@ def gtf_to_bed(gtf_file, feature_type, output_dir):
 
             gene_df = gene_df[['chromosome', 'start', 'end', 'gene_id', 'gene_name', 'strand']]
 
-            gene_df.to_csv(bed_file, sep='\t', header=False, index=False)
-            logging.info(f"Gene BED file created successfully: {bed_file}")
+            # Save gene_df to a temporary file
+            with tempfile.NamedTemporaryFile(mode='w+t', delete=False, suffix='_gene_unsorted.bed') as temp_gene_file:
+                gene_df.to_csv(temp_gene_file.name, sep='\t', header=False, index=False)
+                temp_gene_path = temp_gene_file.name
+            logging.info(f"Unsorted Gene BED file saved to temporary file: {temp_gene_path}")
+
+            # Sort the temporary gene file and save as bed_file
+            sort_bed_file(temp_gene_path, bed_file)
+            logging.info(f"Sorted Gene BED file created successfully: {bed_file}")
+
+            # Clean up the temporary unsorted gene file
+            os.unlink(temp_gene_path)
+            logging.info(f"Temporary unsorted Gene BED file deleted: {temp_gene_path}")
 
         except Exception as e:
             logging.error(f"Failed to process gene boundaries. Error: {e}")
             raise e
+
         
     elif feature_type == "exon":
         # we use a complex set of commands to merge overlapping exon entries by gene, otherwise, the overlap lengths by gene(at exon level) are confounded by overlapping exons
