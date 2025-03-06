@@ -1,5 +1,5 @@
-import os 
-import sys 
+import os
+import sys
 import argparse
 import pysam
 from bam_header_utils import update_pg_header
@@ -15,12 +15,9 @@ def get_version():
             return f.read().strip()
     except FileNotFoundError:
         return "unknown"
-    
+
 # sliding scale for poly(A) color 
-def calculate_color_sliding(pt_value):
-    
-    low_threshold = 30
-    high_threshold = 120
+def calculate_color_sliding(pt_value, low_threshold=30, high_threshold=120):
     gray_color = "128,128,128"  # RGB for grey
 
     if pt_value == -1:
@@ -41,7 +38,6 @@ def calculate_color_sliding(pt_value):
 # quantize poly(A) color for nascent and mature thresholds
 # returns YC tag and QP tag 
 def calculate_color_quantized(pt_value, low_threshold, high_threshold):
-    
     gray_color = "128,128,128"  # RGB for grey
 
     if pt_value == -1:
@@ -58,6 +54,8 @@ def main():
     parser.add_argument("-ibam", required=True, help="Input BAM file")
     parser.add_argument("-obam", required=True, help="Output BAM file")
     parser.add_argument("-q", type=str, help="Comma-separated low and high thresholds for quantized poly(A) color")
+    parser.add_argument("-t", type=str, help="Comma-separated low and high thresholds for the sliding scale color. "
+                                             "Overrides default (30,120). e.g. -t 80,200")
 
     args = parser.parse_args()
 
@@ -70,7 +68,17 @@ def main():
         except ValueError:
             print("Error: -q argument should be two comma-separated integers")
             return
-        
+
+    # set defaults for sliding scale
+    sliding_low_threshold = 30
+    sliding_high_threshold = 120
+    if args.t:
+        try:
+            sliding_low_threshold, sliding_high_threshold = map(int, args.t.split(','))
+        except ValueError:
+            print("Error: -t argument should be two comma-separated integers")
+            return
+
     modified_count = 0  # count of modified reads
     
     # prepare bam header entry 
@@ -93,14 +101,15 @@ def main():
                 if use_quantized_polya_thresholds:
                     color, qp_value = calculate_color_quantized(pt_value, low_threshold, high_threshold)
                     read.set_tag("YC", color)
-
                     # set quantized polyA QP tag 
                     if qp_value is not None:
                         read.set_tag("QP", qp_value, value_type='i')
                 else:
-                    color = calculate_color_sliding(pt_value)
-                
-                read.set_tag("YC", color)
+                    color = calculate_color_sliding(pt_value, 
+                                                    low_threshold=sliding_low_threshold, 
+                                                    high_threshold=sliding_high_threshold)
+                    read.set_tag("YC", color)
+
                 outfile.write(read)
                 modified_count += 1
 
@@ -112,8 +121,8 @@ def main():
         print(f"Quantized polyA color: Red <= {low_threshold}, {low_threshold+1}-{high_threshold-1} Grey, Blue >= {high_threshold}")
         print(f"QP tag: 0 for polyA <= {low_threshold}, 1 for polyA >= {high_threshold}, 2 for {low_threshold} < polyA < {high_threshold}")
     else:
-        print("Scaled polyA color: Red <= 30, 31-119 intermediate, Blue >= 120")
-
+        print(f"Scaled polyA color: Red <= {sliding_low_threshold}, "
+              f"{sliding_low_threshold+1}-{sliding_high_threshold-1} intermediate, Blue >= {sliding_high_threshold}")
 
 if __name__ == "__main__":
     main()
