@@ -5,55 +5,79 @@ from tqdm import tqdm
 
 tqdm.pandas()
 
-# parse_ids function to convert comma-separated string of IDs to a list of integers
 def parse_ids(id_string):
-
+    """
+    Convert a comma-separated string of integer IDs into a sorted list of ints.
+    Returns an empty list if it's missing or invalid.
+    """
     if pd.isna(id_string) or id_string.strip() == '':
         return []
     return sorted(int(x) for x in id_string.split(',') if x.strip().isdigit())
 
-# classify_splicing function to classify reads as 'cryptic' or 'canonical' based on exon_ids, intron_ids, splice_count, and three_prime_feature
-def classify_previous_splicing(df, verbose=False):
+
+def classify_previous_splicing(
+    df, 
+    gene_to_introns,     
+    verbose=False
+):
     """
-    Classify each read as 'cryptic' or 'canonical' based on exon_ids, intron_ids, splice_count, and three_prime_feature.
-    Classifies the splicing of fully-transcribed introns 
+    Classify each read as 'cryptic' or 'canonical' based on exon_ids, intron_ids, splice_count, 
+    and three_prime_feature. Also sub-classify 'unspliced' as 'completely_unspliced' if the read 
+    spans ALL introns in that gene, or 'fully_unspliced' otherwise.
 
     Parameters:
-    df (pd.DataFrame): DataFrame containing the necessary columns:
-        - 'exon_ids' (str): Comma-separated exon IDs.
-        - 'intron_ids' (str): Comma-separated intron IDs.
-        - 'splice_count' (int): Number of splice events.
-        - 'three_prime_feature' (str): Feature where the read ends ('exon_*', 'intron_*', or 'region_DOG').
-        - 'read_id' (str): Unique identifier for the read (used for warnings).
-    verbose (bool): If True, include reasons for 'cryptic' classifications.
+    -----------
+    df (pd.DataFrame): Must contain:
+        - 'gene_id' (str)
+        - 'exon_ids' (str): Comma-separated exon IDs
+        - 'intron_ids' (str): Comma-separated intron IDs
+        - 'splice_count' (int): Number of splice events
+        - 'three_prime_feature' (str): 'exon_*', 'intron_*', or 'region_DOG'
+        - 'read_id' (str): Unique identifier for the read
+
+    gene_to_introns (dict): 
+        A dict mapping gene_id -> set of all intron numbers for that gene.
+
+    verbose (bool): If True, include the specific cryptic reason in the final output.
 
     Returns:
-    pd.DataFrame: DataFrame with additional 'cryptic_splicing', 'cryptic_reason', and 'previous_splicing_status' columns.
+    --------
+    pd.DataFrame: 
+      The original df plus added columns:
+        - 'cryptic_splicing' ('cryptic' or 'canonical')
+        - 'cryptic_reason'   (if verbose=True)
+        - 'previous_splicing_status' 
+          which can be 'fully_spliced', 'partially_spliced', 'completely_unspliced',
+          'fully_unspliced', or 'ambiguous'
     """
-    
+
     def classify_row(row):
         exon_ids = parse_ids(row['exon_ids'])
         intron_ids = parse_ids(row['intron_ids'])
         splice_count = row['splice_count']
         three_prime_feature = row['three_prime_feature']
-        read_id = row['read_id']
+        read_id = row.get('read_id', 'unknown_read')
         
-        expected_splice_count = 0
+        # get the set of introns for the gene
+        gene_id = row.get('gene_id', None)
+        # default to empty set if missing
+        all_introns_for_gene = gene_to_introns.get(gene_id, set())
 
-        # number of possible splice events based on fully-transcribed introns seen in read 
+        expected_splice_count = 0
         possible_splice_count = 0
         
-        # sort features 
+        # gather features in ascending numeric order
         all_features = []
         for exon_id in exon_ids:
             all_features.append(('exon', exon_id))
         for intron_id in intron_ids:
             all_features.append(('intron', intron_id))
         all_features = sorted(all_features, key=lambda x: (x[1], x[0] == 'intron'))
+
         if three_prime_feature == 'region_DOG':
             all_features.append(('region_DOG', float('inf')))
         
-        # determine the read 3' feature 
+        # parse the 3' feature
         if three_prime_feature.startswith('exon_'):
             current_type = 'exon'
             current_id = int(three_prime_feature.split('_')[1])
@@ -67,125 +91,140 @@ def classify_previous_splicing(df, verbose=False):
             reason = 'Unknown three_prime_feature type.'
             return ('cryptic', reason if verbose else None, None)
         
-        # find the index of the starting feature in the sorted list
+        # find this feature in the sorted list
         current_index = None
-        for idx, (feature_type, feature_id) in enumerate(all_features):
-            if feature_type == current_type and feature_id == current_id:
+        for idx, (ftype, fid) in enumerate(all_features):
+            if ftype == current_type and fid == current_id:
                 current_index = idx
                 break
         
         if current_index is None:
-            reason = 'Read 3\' end feature feature not found in the list of introns or exons.'
+            reason = "3' end feature not found among exons/introns."
             return ('cryptic', reason if verbose else None, None)
         
-        # check if three_prime_feature matches the highest-ranked feature
-        highest_feature_type, highest_feature_id = all_features[-1]
-        if current_type != highest_feature_type or current_id != highest_feature_id:
-            reason = 'Three_prime_feature does not match the highest-ranked feature.'
+        # confirm highest feature
+        highest_ftype, highest_fid = all_features[-1]
+        if current_type != highest_ftype or current_id != highest_fid:
+            reason = '3\' end feature is not the highest-ranked feature.'
             return ('cryptic', reason if verbose else None, None)
         
-        # decrement through features to check for cryptic splicing
+        # backtrack to check for cryptic splicing
         while current_index > 0:
-            current_type, current_id = all_features[current_index]
-            previous_type, previous_id = all_features[current_index - 1]
+            ctype, cid = all_features[current_index]
+            ptype, pid = all_features[current_index - 1]
             
-            if current_type == 'exon':
-                if previous_type == 'intron':
-                    
-                    # the previous intron must be the immediately preceding one
-                    if previous_id != current_id - 1:
-                        reason = f'Exon {current_id} is not immediately preceded by the corresponding intron.'
+            if ctype == 'exon':
+                if ptype == 'intron':
+                    # intron must be that exon - 1
+                    if pid != cid - 1:
+                        reason = f"Exon {cid} not preceded by intron {cid-1}."
                         return ('cryptic', reason if verbose else None, None)
                     current_index -= 1
-
-                    # if we decrement from an exon to an intron, increment possible splice count 
-                    possible_splice_count += 1 
-
-                elif previous_type == 'exon':
-                    
-                    # if moving to a lower-ranked exon, increment expected splice count
+                    possible_splice_count += 1
+                elif ptype == 'exon':
                     expected_splice_count += 1
-                    
-                    # if we decrement from an exon to a previous exon, increment possible splice count
-                    possible_splice_count += 1 
-                    
+                    possible_splice_count += 1
                     current_index -= 1
-
                 else:
-                    reason = f'Unexpected preceding feature type {previous_type} for exon {current_id}.'
+                    reason = f"Unexpected preceding feature {ptype} for exon {cid}."
                     return ('cryptic', reason if verbose else None, None)
-            elif current_type == 'intron':
-                if previous_type == 'exon':
-                    
-                    # the previous exon must be the exon of the immediately lower rank
-                    if previous_id != current_id:
-                        reason = f'Intron {current_id} is not immediately preceded by the corresponding exon.'
+            
+            elif ctype == 'intron':
+                if ptype == 'exon':
+                    # intron must be preceded by that same ID exon
+                    if pid != cid:
+                        reason = f"Intron {cid} not preceded by exon {cid}."
                         return ('cryptic', reason if verbose else None, None)
                     current_index -= 1
                 else:
-                    
-                    # if moving from one intron to another without an intervening exon, it is cryptic
-                    reason = f'Intron {current_id} is not immediately preceded by an exon.'
+                    reason = f"Intron {cid} not preceded by an exon."
                     return ('cryptic', reason if verbose else None, None)
-            elif current_type == 'region_DOG':
-                
-                # DOG regions should only be preceded by the highest-ranked exon
-                if previous_type != 'exon' or previous_id != max(exon_ids):
-                    reason = 'region_DOG is not properly preceded by the highest-ranked exon.'
+            
+            elif ctype == 'region_DOG':
+                # must be preceded by highest exon
+                if ptype != 'exon' or pid != max(exon_ids) if exon_ids else -9999:
+                    reason = "region_DOG not preceded by highest exon."
                     return ('cryptic', reason if verbose else None, None)
                 current_index -= 1
             
             else:
-                reason = 'Unknown feature type during backtracking.'
+                reason = f"Unknown feature type {ctype} in backtrack."
                 return ('cryptic', reason if verbose else None, None)
         
-        # compare expected splice count with actual splice count
+        # final check: expected vs actual splices
         if expected_splice_count != splice_count:
-            reason = f'Splice count {splice_count} does not match expected {expected_splice_count}.'
+            reason = f"Splice count mismatch: expected {expected_splice_count}, got {splice_count}."
             return ('cryptic', reason if verbose else None, None)
         
+        # decide final classification
         if possible_splice_count > 0 and splice_count == 0:
-            return ('canonical', None, 'fully_unspliced')
-        
+            # the read is unspliced
+            read_intron_set = set(intron_ids)
+            # if the gene has >=1 intron and read_intron_set matches all_introns_for_gene => completely_unspliced
+
+            # print(f"all_introns_for_gene: {all_introns_for_gene}")
+            # print(f"read_intron_set: {read_intron_set}")
+            # print(f"gene_id: {gene_id}")
+            # print(f"read_id: {read_id}")
+            # print(f"exon_ids: {exon_ids}")
+            # print(f"intron_ids: {intron_ids}")
+            # print(f"splice_count: {splice_count}")
+            # print(f"possible_splice_count: {possible_splice_count}")
+            # print(f"three_prime_feature: {three_prime_feature}")
+            # print(f"current_index: {current_index}")
+            # print(f"expected_splice_count: {expected_splice_count}")
+            # print(f"possible_splice_count: {possible_splice_count}")
+            # print(f"current_type: {current_type}")
+            # print(f"current_id: {current_id}")
+            # print(f"highest_ftype: {highest_ftype}")
+            # print(f"highest_fid: {highest_fid}")
+            # print(f"current_index: {current_index}")
+            # print(f"all_features: {all_features}")
+            # print(f"current_index: {current_index}")
+
+
+            if len(all_introns_for_gene) >= 1 and read_intron_set == all_introns_for_gene:
+                return ('canonical', None, 'completely_unspliced')
+            else:
+                return ('canonical', None, 'fully_unspliced')
+
         elif possible_splice_count > 0 and splice_count < possible_splice_count:
-            return('canonical', None, 'partially_spliced')
+            return ('canonical', None, 'partially_spliced')
         
         elif possible_splice_count > 0 and splice_count == possible_splice_count:
             return ('canonical', None, 'fully_spliced')
         
-        elif possible_splice_count == 0: 
+        else:
+            # possible_splice_count == 0 => ambiguous
             return ('canonical', None, 'ambiguous')
-        
-        
-    # classify with tqdm 
+
+    # use tqdm to classify
     classification = df.progress_apply(classify_row, axis=1, result_type='expand')
     classification.columns = ['cryptic_splicing', 'cryptic_reason', 'previous_splicing_status']
     
-    # assign to original df 
+    # attach these columns
     df = pd.concat([df, classification], axis=1)
     
-    # if verbose is False, drop the 'cryptic_reason' column
     if not verbose:
-        df = df.drop(columns=['cryptic_reason'])
+        df.drop(columns=['cryptic_reason'], inplace=True)
     
     return df
 
-# test cases for the classify_splicing function
+# test cases for the classify_previous_splicing function
 def test_classify_splicing():
     """
-    Test the classify_splicing function with a variety of test cases to ensure correctness.
+    Test the classify_previous_splicing function with a variety of test cases to ensure correctness.
     """
     test_cases = [
-
         # 1. Canonical: Proper splicing with exons and introns
-        {'splice_count': 1, 'exon_ids': '2,3', 'intron_ids': '1', 'three_prime_feature': 'exon_3', 'read_id': 'read_1', 'expected': 'canonical'},
-        
+        {'gene_id': 'GENE_01', 'splice_count': 1, 'exon_ids': '2,3', 'intron_ids': '1', 'three_prime_feature': 'exon_3', 'read_id': 'read_1', 'expected': 'canonical'},
+
         # 2. Cryptic: splice_count exceeds possible based on exons
-        {'splice_count': 3, 'exon_ids': '1,2', 'intron_ids': '', 'three_prime_feature': 'exon_2', 'read_id': 'read_2', 'expected': 'cryptic'},
-        
-        # 3. Cryptic: splice_count >0 but no exons or introns spanned in DOG region 
-        {'splice_count': 1, 'exon_ids': '', 'intron_ids': '', 'three_prime_feature': 'region_DOG', 'read_id': 'read_3', 'expected': 'cryptic'},
-        
+        {'gene_id': 'GENE_01', 'splice_count': 3, 'exon_ids': '1,2', 'intron_ids': '', 'three_prime_feature': 'exon_2', 'read_id': 'read_2', 'expected': 'cryptic'},
+
+        # 3. Canonical: A read that has exactly 1 intron in gene GENE_02, is unspliced, and the gene has 1 intron total => 'completely_unspliced'
+        {'gene_id': 'GENE_02', 'splice_count': 0, 'exon_ids': '', 'intron_ids': '1', 'three_prime_feature': 'intron_1', 'read_id': 'read_3', 'expected': 'canonical'},  
+
         # 4. Cryptic: Spans 2 introns but splice_count=0 and missing exons between introns
         {'splice_count': 0, 'exon_ids': '', 'intron_ids': '2,3', 'three_prime_feature': 'intron_3', 'read_id': 'read_4', 'expected': 'cryptic'},
         
@@ -244,26 +283,38 @@ def test_classify_splicing():
         {'splice_count': 1, 'exon_ids': '1,2,4,5', 'intron_ids': '1,2,3', 'three_prime_feature': 'exon_5', 'read_id': 'read_21', 'expected': 'cryptic'},
     ]
     
-    # test df
     df_tests = pd.DataFrame(test_cases)
-    
-    # classify with verbosity 
-    classified_df = classify_splicing(df_tests, verbose=True)
+
+    # a minimal dictionary:
+    #   GENE_01 => {1,2,3} (meaning it has introns #1, #2, #3)
+    #   GENE_02 => {1}     (just one intron)
+    #   anything else => empty set
+    mock_gene_to_introns = {
+        'GENE_01': {1, 2, 3},
+        'GENE_02': {1},
+    }
+
+    # classify 
+    classified_df = classify_previous_splicing(
+        df_tests, 
+        gene_to_introns=mock_gene_to_introns,  
+        verbose=True
+    )
     
     # verify results
     for i, row in classified_df.iterrows():
-        actual = row['cryptic_splicing']
+        actual_splicing = row['cryptic_splicing']
         expected = row['expected']
         read_id = row['read_id']
-        if actual == expected:
-            print(f"Test case {i+1} passed.")
+        if actual_splicing == expected:
+            print(f"Test case {i+1} passed ({read_id}).")
         else:
             reason = row.get('cryptic_reason')
             if pd.isna(reason):
                 reason = 'No reason provided.'
-            print(f"Test case {i+1} failed: Expected '{expected}', got '{actual}'. Reason: {reason}")
+            print(f"Test case {i+1} failed ({read_id}): Expected '{expected}', got '{actual_splicing}'. Reason: {reason}")
 
-RUN_TESTS = False
+RUN_TESTS = False 
 
 if RUN_TESTS:
     test_classify_splicing()

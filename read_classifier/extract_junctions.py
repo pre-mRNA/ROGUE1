@@ -1,17 +1,17 @@
-import pandas as pd 
+import pandas as pd
 import pysam
 import multiprocessing
 from functools import partial
-import logging 
+import logging
 
 # if we're using a second-pass index
 # instead of de novo calculating introns
 # we can just use all the introns in the refined annotation 
 # this function converts the updated_intron.bed file to a format that can be used by the rest of the pipeline
 def process_intron_to_junctions(intron_bed):
-    df = pd.read_csv(intron_bed, sep='\t', header=None, 
+    df = pd.read_csv(intron_bed, sep='\t', header=None,
                      names=['Chromosome', 'Start', 'End', 'Gene_ID', 'Intron_ID', 'Strand'])
-    df['Counts'] = -1  # default count for annotated junction 
+    df['Counts'] = -1  # default count for annotated junction
     df = df[['Chromosome', 'Start', 'End', 'Gene_ID', 'Counts', 'Strand']]
     return df
 
@@ -19,7 +19,6 @@ def extract_region_splice_junctions(bam_file, region, gene_id_map):
     """
     Extract splice junctions for a specific region from a BAM file.
     """
-
     bam = pysam.AlignmentFile(bam_file, "rb")
     results = []
     for read in bam.fetch(region=region):
@@ -27,21 +26,18 @@ def extract_region_splice_junctions(bam_file, region, gene_id_map):
             continue
         gene_id = gene_id_map.get(read.query_name, "unknown")
         current_pos = read.reference_start
-        # print(f"{read.cigartuples}")
         for operation, length in read.cigartuples:
             if operation in {0, 7, 8}:  # match
                 current_pos += length
             elif operation == 3:  # splice
-                # print(f"match, N, {length}")
                 start = current_pos
                 end = current_pos + length
                 strand = '-' if read.is_reverse else '+'
-                # print(f"{read.reference_name}, {start}, {end}, {strand}")
                 results.append([read.reference_name, start, end, strand, gene_id])
                 current_pos += length
             elif operation == 2:  # deletion or softclip
                 current_pos += length
-            elif operation == 1:  # insertion 
+            elif operation == 1:  # insertion
                 continue
     bam.close()
     return results
@@ -49,20 +45,36 @@ def extract_region_splice_junctions(bam_file, region, gene_id_map):
 def parallel_extract_splice_junctions(bam_file, num_cpus, gene_id_map):
     """
     Extract splice junctions from a BAM file in parallel using multiple CPUs.
+    Returns a DataFrame with columns: [Chromosome, Start, End, Strand, Gene_ID].
     """
-    logging.info("Extracting splice junctions")
-    bam = pysam.AlignmentFile(bam_file, "rb")
+    logging.info("Extracting splice junctions (single-pass, multi-threaded)")
 
-    contigs = bam.references
-    bam.close()
+    # open the file once with multiple decompression threads
+    # num_cpus can be set to however many threads you want
+    # this avoids multiple reopens/fetch calls
+    with pysam.AlignmentFile(bam_file, "rb", threads=num_cpus) as bam:
+        results = []
+        for read in bam:
+            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                continue
+            gene_id = gene_id_map.get(read.query_name, "unknown")
+            current_pos = read.reference_start
+            for operation, length in read.cigartuples:
+                if operation in {0, 7, 8}:  # match
+                    current_pos += length
+                elif operation == 3:       # splice
+                    start = current_pos
+                    end = current_pos + length
+                    strand = '-' if read.is_reverse else '+'
+                    results.append([read.reference_name, start, end, strand, gene_id])
+                    current_pos += length
+                elif operation == 2:      # deletion or softclip
+                    current_pos += length
+                elif operation == 1:      # insertion
+                    continue
 
-    with multiprocessing.Pool(num_cpus) as pool:
-        func = partial(extract_region_splice_junctions, bam_file, gene_id_map=gene_id_map)
-        results = pool.map(func, contigs)
-
-    # flatten into df 
-    flat_results = [item for sublist in results for item in sublist]
-    df = pd.DataFrame(flat_results, columns=['Chromosome', 'Start', 'End', 'Strand', 'Gene_ID'])
+    # same final dataframe shape/columns as before
+    df = pd.DataFrame(results, columns=['Chromosome', 'Start', 'End', 'Strand', 'Gene_ID'])
     return df
 
 def summarize_junctions(df, min_reads):
