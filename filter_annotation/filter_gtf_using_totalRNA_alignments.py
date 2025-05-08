@@ -53,83 +53,84 @@ def count_genes(gtf_file):
 
 def load_gtf_into_memory(gtf_file):
     """
-    Loads the GTF file into memory using gffutils and organizes genes and transcripts.
+    load the GTF into memory with gffutils and organise genes + transcripts
     """
-    logging.info("Loading GTF into memory...")
+    logging.info("Loading GTF into memory…")
     db_file = gtf_file + ".db"
-    
-    try:
-        if not os.path.exists(db_file):
-            logging.info("GFF database not found. Creating a new database...")
-            try:
-                # see: https://github.com/daler/gffutils/issues/20
-                # this has only been tested with Ensembl GTFs 
-                gffutils.create_db(
-                    gtf_file,
-                    db_file,
-                    force=True,
-                    keep_order=True,
-                    merge_strategy='warning',      # corrected merge strategy
-                    sort_attribute_values=True,
-                    disable_infer_genes=True,           # disable gene inference
-                    disable_infer_transcripts=True      # disable transcript inference
-                )
-                logging.info("GFF database created successfully.")
-            except Exception as e:
-                logging.error(f"Failed to create GFF database: {e}")
-                raise
-        
-        if os.path.getsize(db_file) == 0:
-            logging.error(f"GFF database file {db_file} is empty.")
-            raise ValueError(f"GFF database file {db_file} is empty.")
-        
-        db = gffutils.FeatureDB(db_file)
-        genes = defaultdict(list)
-        transcripts = {}
-        
-        for gene in db.features_of_type('gene'):
-            genes[(gene.chrom, gene.strand)].append({
-                'id': gene.id,
-                'chrom': gene.chrom,
-                'start': gene.start,
-                'end': gene.end,
-                'strand': gene.strand,
-                'transcripts': []
-            })
-        
-        for transcript in db.features_of_type('transcript'):
-            gene_id = transcript.attributes.get('gene_id', [None])[0]
-            if not gene_id:
-                logging.warning(f"Transcript {transcript.id} lacks gene_id. Skipping.")
-                continue
-            gene_found = False
-            for gene in genes[(transcript.chrom, transcript.strand)]:
-                if gene['id'] == gene_id:
-                    gene['transcripts'].append(transcript.id)
-                    gene_found = True
-                    break
-            if not gene_found:
-                logging.warning(f"Gene ID {gene_id} for transcript {transcript.id} not found in genes list.")
-                continue
-            
-            exons = sorted(db.children(transcript, featuretype='exon'), key=lambda x: x.start)
-            transcripts[transcript.id] = {
-                'chrom': transcript.chrom,
-                'start': transcript.start,
-                'end': transcript.end,
-                'strand': transcript.strand,
-                'exons': [(e.start, e.end) for e in exons],
-                'length': transcript.end - transcript.start
-            }
-        
-        for key in genes:
-            genes[key].sort(key=lambda x: x['start'])
-        
-        logging.info(f"Loaded {sum(len(g) for g in genes.values())} genes and {len(transcripts)} transcripts.")
-        return dict(genes), transcripts
-    except Exception as e:
-        logging.error(f"Error loading GTF into memory: {str(e)}")
-        raise
+
+    if not os.path.exists(db_file):
+        logging.info("GFF database not found – creating…")
+        gffutils.create_db(
+            gtf_file,
+            db_file,
+            id_spec={'gene': 'gene_id', 'transcript': 'transcript_id'},  # liftoff-friendly
+            force=True,
+            keep_order=True,
+            merge_strategy='warning',
+            sort_attribute_values=True,
+            disable_infer_genes=True,
+            disable_infer_transcripts=True
+        )
+        logging.info("GFF database created.")
+
+    if os.path.getsize(db_file) == 0:
+        raise ValueError(f"GFF database file {db_file} is empty.")
+
+    db = gffutils.FeatureDB(db_file)
+    genes = defaultdict(list)
+    transcripts = {}
+
+    # collect features 
+    for gene in db.features_of_type('gene'):
+        genes[(gene.chrom, gene.strand)].append({
+            'id': gene.id,
+            'chrom': gene.chrom,
+            'start': gene.start,
+            'end': gene.end,
+            'strand': gene.strand,
+            'transcripts': []
+        })
+
+    for transcript in db.features_of_type('transcript'):
+        gene_id = transcript.attributes.get('gene_id', [None])[0]
+        if not gene_id:
+            logging.warning(f"Transcript {transcript.id} lacks gene_id – skipped.")
+            continue
+        for gene in genes[(transcript.chrom, transcript.strand)]:
+            if gene['id'] == gene_id:
+                gene['transcripts'].append(transcript.id)
+                break
+
+        exons = sorted(db.children(transcript, featuretype='exon'), key=lambda x: x.start)
+        transcripts[transcript.id] = {
+            'chrom': transcript.chrom,
+            'start': transcript.start,
+            'end': transcript.end,
+            'strand': transcript.strand,
+            'exons': [(e.start, e.end) for e in exons],
+            'length': transcript.end - transcript.start
+        }
+
+    # sort gene lists for downstream chunking
+    for key in genes:
+        genes[key].sort(key=lambda x: x['start'])
+
+    # integrity check 
+    genes_no_tx = [
+        g['id'] for gene_list in genes.values() for g in gene_list
+        if len(g['transcripts']) == 0
+    ]
+    if genes_no_tx:
+        sample = ', '.join(genes_no_tx[:5])
+        msg = (f"{len(genes_no_tx)} genes have no transcript features (e.g. {sample}).")
+        if os.environ.get("FILTER_GTF_STRICT"):
+            raise ValueError(msg + "  Aborting because strict mode is ON.")
+        logging.warning(msg + "  They will be ignored downstream.")
+
+    logging.info(f"Loaded {sum(len(g) for g in genes.values())} genes "
+                 f"and {len(transcripts)} transcripts.")
+    return dict(genes), transcripts
+
 
 def extract_splice_junctions(read, strand):
     """
@@ -308,33 +309,57 @@ def parallel_process_genes(bam_file, genes, transcripts):
 
 def prepare_scoring_data(support_counts, transcripts):
     """
-    Prepares scoring data based on support counts for each transcript.
+    Build a per-gene data block used for transcript scoring.
+    Genes that end up with no usable transcript IDs are skipped.
     """
     logging.info("Preparing scoring data...")
     scoring_data = {}
+    skipped_empty   = 0   # genes whose gene_counts was {}
+    skipped_orphan  = 0   # genes whose transcript_ids were not present in transcripts dict
+
     for gene_id, gene_counts in support_counts.items():
-        gene_end = max(transcripts[t_id]['end'] for t_id in gene_counts)
-        transcript_ids = list(gene_counts.keys())
-        
-        counts = np.array([[gene_counts[t_id]['5_end'], gene_counts[t_id]['3_end'], gene_counts[t_id]['splice']] 
-                           for t_id in transcript_ids])
-        
-        transcript_starts = np.array([transcripts[t_id]['start'] for t_id in transcript_ids])
-        transcript_ends = np.array([transcripts[t_id]['end'] for t_id in transcript_ids])
-        transcript_strands = np.array([transcripts[t_id]['strand'] for t_id in transcript_ids])
-        exon_counts = np.array([len(transcripts[t_id]['exons']) for t_id in transcript_ids])
-        
+
+        # no transcript counts 
+        if not gene_counts:
+            skipped_empty += 1
+            continue
+
+        # keep only transcript IDs we actually have in the transcripts dict
+        valid_t_ids = [t_id for t_id in gene_counts if t_id in transcripts]
+        if not valid_t_ids:
+            skipped_orphan += 1
+            continue
+
+        gene_end = max(transcripts[t_id]['end'] for t_id in valid_t_ids)
+
+        counts = np.array([[gene_counts[t_id]['5_end'],
+                            gene_counts[t_id]['3_end'],
+                            gene_counts[t_id]['splice']]
+                           for t_id in valid_t_ids])
+
         scoring_data[gene_id] = {
-            'transcript_ids': transcript_ids,
-            'counts': counts,
-            'transcript_starts': transcript_starts,
-            'transcript_ends': transcript_ends,
-            'transcript_strands': transcript_strands,
-            'exon_counts': exon_counts,
-            'gene_end': gene_end
+            'transcript_ids'     : valid_t_ids,
+            'counts'             : counts,
+            'transcript_starts'  : np.array([transcripts[t_id]['start']  for t_id in valid_t_ids]),
+            'transcript_ends'    : np.array([transcripts[t_id]['end']    for t_id in valid_t_ids]),
+            'transcript_strands' : np.array([transcripts[t_id]['strand'] for t_id in valid_t_ids]),
+            'exon_counts'        : np.array([len(transcripts[t_id]['exons']) for t_id in valid_t_ids]),
+            'gene_end'           : gene_end
         }
-    
-    return scoring_data
+
+    if skipped_empty:
+        logging.warning(f"Skipped {skipped_empty} genes whose support_counts "
+                        "mapping was empty (no linked transcripts).")
+    if skipped_orphan:
+        logging.warning(f"Skipped {skipped_orphan} genes whose transcript IDs "
+                        "were not present in the transcripts dictionary.")
+
+    logging.info(f"Prepared scoring data for {len(scoring_data)} genes.")
+
+    skipped_count = skipped_empty + skipped_orphan
+
+    return scoring_data, skipped_count
+
 
 def process_scoring_chunk(args):
     """
@@ -398,7 +423,7 @@ def select_best_transcripts(support_counts, transcripts, score_matrix_file=None)
     """
     logging.info("Selecting best transcripts...")
     
-    scoring_data = prepare_scoring_data(support_counts, transcripts)
+    scoring_data, skipped_count = prepare_scoring_data(support_counts, transcripts)
     
     gene_ids = list(scoring_data.keys())
     gene_chunks = [gene_ids[i:i+CHUNK_SIZE] for i in range(0, len(gene_ids), CHUNK_SIZE)]
@@ -459,7 +484,7 @@ def select_best_transcripts(support_counts, transcripts, score_matrix_file=None)
     logging.info(f"Selected best transcripts for {genes_with_reads} genes with reads.")
     logging.info(f"Selected longest transcript for {genes_without_reads} genes without reads.")
     
-    return best_transcripts, genes_with_reads, genes_without_reads
+    return best_transcripts, genes_with_reads, genes_without_reads, skipped_count
 
 def filter_gtf(gtf_file, best_transcripts, transcripts, out_gtf):
     """
@@ -617,7 +642,7 @@ def main():
         
         # select best transcripts based on support counts
         try:
-            best_transcripts, genes_with_reads, genes_without_reads = select_best_transcripts(support_counts, transcripts, args.score_matrix)
+            best_transcripts, genes_with_reads, genes_without_reads, skipped_count = select_best_transcripts(support_counts, transcripts, args.score_matrix)
         except Exception as e:
             logging.error(f"Failed during transcript selection: {e}")
             raise
@@ -632,8 +657,9 @@ def main():
     # verify gene counts
     try:
         original_gene_count = count_genes(args.gtf_file) if not args.resume else count_genes(args.out_gtf)  # Dynamically get total gene count
+        expected_gene_count = original_gene_count - skipped_count
         filtered_gene_count = count_genes(args.out_gtf)
-        if original_gene_count == filtered_gene_count:
+        if expected_gene_count == filtered_gene_count:
             logging.info("Gene count check passed: The number of genes before and after filtering is the same.")
         else:
             logging.error(f"Gene count mismatch: Original GTF had {original_gene_count} genes, but filtered GTF has {filtered_gene_count} genes.")
